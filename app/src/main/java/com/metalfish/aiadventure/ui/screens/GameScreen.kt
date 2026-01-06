@@ -147,22 +147,6 @@ fun GameScreen(
 
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
 
-                // HUD small
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 14.dp)
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(Color.Black.copy(alpha = 0.30f))
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    Text("HP ${state.hero.hp}", color = Color.White, fontSize = 12.sp)
-                    Text("ST ${state.hero.stamina}", color = Color.White, fontSize = 12.sp)
-                    Text("$ ${state.hero.gold}", color = Color.White, fontSize = 12.sp)
-                    Text("REP ${state.hero.reputation}", color = Color.White, fontSize = 12.sp)
-                }
-
                 // Hint (shows while swiping)
                 AnimatedVisibility(
                     visible = hintText.isNotBlank() && canSwipe,
@@ -314,8 +298,17 @@ fun GameScreen(
                                     style = stroke
                                 )
                             }
+                            val loadingText = remember {
+                                listOf(
+                                    "Прокладываю маршрут…",
+                                    "Собираю артефакты…",
+                                    "Поджигаю неон…",
+                                    "Шью мир по нитям…",
+                                    "Пыль оседает…"
+                                ).random()
+                            }
                             Text(
-                                text = "Generating...",
+                                text = loadingText,
                                 color = Color.White.copy(alpha = 0.9f),
                                 fontSize = 13.sp,
                                 modifier = Modifier
@@ -326,20 +319,6 @@ fun GameScreen(
                     }
                 }
 
-                AnimatedVisibility(
-                    visible = hasCard && !state.isGameOver,
-                    enter = fadeIn(),
-                    exit = fadeOut(),
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 22.dp)
-                ) {
-                    Text(
-                        text = if (canSwipe) "Свайпни: ← / →" else "Подождите…",
-                        color = Color.White.copy(alpha = 0.65f),
-                        fontSize = 13.sp
-                    )
-                }
             }
         }
     }
