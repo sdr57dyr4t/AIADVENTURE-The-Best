@@ -194,7 +194,6 @@ fun GameScreen(
                     modifier = Modifier
                         .size(cardW, cardH)
                         .clip(RoundedCornerShape(22.dp))
-                        .border(2.dp, borderBrush, RoundedCornerShape(22.dp))
                         .rotate(rotation)
                         .offset { IntOffset(drag.x.roundToInt(), drag.y.roundToInt()) }
                         .pointerInput(canSwipe, leftChoice, rightChoice) {
@@ -234,13 +233,19 @@ fun GameScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     val bmp = cardBitmap.value
-                    if (bmp != null) {
-                        Image(
-                            bitmap = bmp,
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
+                    if (bmp != null && !showLoading) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .border(2.dp, borderBrush, RoundedCornerShape(22.dp))
+                        ) {
+                            Image(
+                                bitmap = bmp,
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
                     } else {
                         Box(
                             modifier = Modifier
@@ -249,7 +254,7 @@ fun GameScreen(
                         )
                     }
 
-                    if (bmp != null) {
+                    if (bmp != null && !showLoading) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -322,7 +327,7 @@ fun GameScreen(
                 }
 
                 AnimatedVisibility(
-                    visible = !state.isGameOver,
+                    visible = hasCard && !state.isGameOver,
                     enter = fadeIn(),
                     exit = fadeOut(),
                     modifier = Modifier
