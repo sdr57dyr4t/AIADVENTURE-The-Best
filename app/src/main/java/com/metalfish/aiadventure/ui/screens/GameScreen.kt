@@ -255,20 +255,20 @@ fun GameScreen(
 
                         val t = state.sceneText.trim()
                         val font = when {
-                            t.length <= 140 -> 20.sp
-                            t.length <= 260 -> 18.sp
-                            t.length <= 420 -> 16.sp
-                            else -> 15.sp
+                            t.length <= 180 -> 20.sp
+                            t.length <= 320 -> 18.sp
+                            t.length <= 520 -> 16.sp
+                            else -> 14.sp
                         }
 
                         Text(
                             text = t,
                             color = Color.White,
                             fontSize = font,
-                            lineHeight = (font.value + 6).sp,
+                            lineHeight = (font.value + 4).sp,
                             textAlign = TextAlign.Center,
-                            maxLines = 9,
-                            overflow = TextOverflow.Ellipsis,
+                            maxLines = 12,
+                            overflow = TextOverflow.Clip,
                             modifier = Modifier.padding(horizontal = 18.dp)
                         )
                     }

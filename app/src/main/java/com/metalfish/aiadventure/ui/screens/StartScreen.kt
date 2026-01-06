@@ -7,6 +7,7 @@ import androidx.compose.animation.core.EaseOutQuad
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -98,6 +99,20 @@ fun StartScreen(
             .background(MaterialTheme.colorScheme.background)
             .padding(20.dp)
     ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val spacing = 26.dp.toPx()
+            val radius = 1.2.dp.toPx()
+            val color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.06f)
+            var y = 0f
+            while (y <= size.height) {
+                var x = 0f
+                while (x <= size.width) {
+                    drawCircle(color = color, radius = radius, center = Offset(x, y))
+                    x += spacing
+                }
+                y += spacing
+            }
+        }
         Column(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.Top
@@ -139,7 +154,7 @@ fun StartScreen(
 
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(22.dp)
             ) {
                 worlds.forEachIndexed { index, world ->
                     WorldImageCard(
@@ -212,11 +227,12 @@ private fun WorldImageCard(
                 }
                 .pointerInput(world.imageRes) {
                     detectHorizontalDragGestures(
-                    onDragStart = {
-                        dragDistance.value = 0f
-                        started.value = false
-                        dragVelocity.value = 0f
-                    },
+                        onDragStart = {
+                            dragDistance.value = 0f
+                            started.value = false
+                            dragVelocity.value = 0f
+                            onPlayMusic()
+                        },
                     onDragCancel = {
                         dragDistance.value = 0f
                         scope.launch {

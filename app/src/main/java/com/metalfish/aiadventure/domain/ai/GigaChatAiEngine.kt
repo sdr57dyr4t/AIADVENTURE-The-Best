@@ -1,4 +1,4 @@
-package com.metalfish.aiadventure.domain.ai
+﻿package com.metalfish.aiadventure.domain.ai
 
 import android.util.Log
 import com.metalfish.aiadventure.BuildConfig
@@ -50,7 +50,7 @@ class GigaChatAiEngine @Inject constructor(
         val accessToken = getAccessToken(authKeyOrToken)
 
         val req = ChatRequest(
-            model = "GigaChat",
+            model = "GigaChat-2-Max",
             messages = listOf(
                 Msg(role = "system", content = systemPrompt()),
                 Msg(role = "user", content = userPrompt(currentSceneText, playerChoice, context))
@@ -68,7 +68,7 @@ class GigaChatAiEngine @Inject constructor(
         val resp = runCatching { json.decodeFromString(ChatResponse.serializer(), responseText) }
             .getOrElse {
                 Log.e(TAG, "GigaChat parse ChatResponse failed. Raw=${responseText.take(2000)}", it)
-                return fallbackTurn("Сбой генерации. Ситуация накаляется — действуй!", context)
+                return fallbackTurn("Сеть отвечает странной тишиной. Реальность дрожит и не открывается.", context)
             }
 
         val raw = resp.choices.firstOrNull()?.message?.content.orEmpty().trim()
@@ -76,34 +76,30 @@ class GigaChatAiEngine @Inject constructor(
 
         val scene = parseSceneJson(raw, context)
 
-        return AiTurnResult(
-            sceneText = scene.sceneText.trim(),
-            choices = scene.choices.take(2).ifEmpty { listOf("Рвануть вперёд", "Отступить") },
-            outcomeText = scene.outcomeText.trim(),
-            statChanges = scene.statChanges.map { StatChange(it.key, it.delta) },
-            imagePrompt = scene.imagePrompt.ifBlank { buildFallbackImagePrompt(context, scene.sceneText) },
-            mode = parseTurnMode(scene.mode),
-            combatOutcome = parseCombatOutcome(scene.combatOutcome)
-        )
-    }
-
-    private fun parseTurnMode(mode: String?): TurnMode {
-        return if (mode.equals("COMBAT", ignoreCase = true)) TurnMode.COMBAT else TurnMode.STORY
-    }
-
-    private fun parseCombatOutcome(outcome: String?): CombatOutcome? {
-        return when (outcome?.trim()?.uppercase()) {
-            "VICTORY" -> CombatOutcome.VICTORY
-            "DEATH" -> CombatOutcome.DEATH
-            "ESCAPE" -> CombatOutcome.ESCAPE
-            else -> null
+        val isPrologueSwipe = context.phase.equals("PROLOGUE", ignoreCase = true) && context.step < 2
+        val choices = if (isPrologueSwipe) {
+            listOf("Дальше", "Дальше")
+        } else {
+            listOf(scene.varLeft, scene.varRight).map { it.trim() }.filter { it.isNotBlank() }
+                .take(2)
+                .ifEmpty { listOf("Продолжить путь", "Остановиться и осмотреться") }
         }
+
+        return AiTurnResult(
+            sceneText = scene.sceneDescr.trim().take(360),
+            choices = choices,
+            outcomeText = "",
+            statChanges = emptyList(),
+            imagePrompt = scene.imgPrmt.ifBlank { buildFallbackImagePrompt(context, scene.sceneDescr) },
+            mode = TurnMode.STORY,
+            combatOutcome = null
+        )
     }
 
     private fun fallbackTurn(text: String, ctx: AiContext): AiTurnResult {
         return AiTurnResult(
-            sceneText = text.take(260),
-            choices = listOf("Рвануть вперёд", "Отступить"),
+            sceneText = text.take(360),
+            choices = listOf("Продолжить путь", "Остановиться и осмотреться"),
             outcomeText = "",
             statChanges = emptyList(),
             imagePrompt = buildFallbackImagePrompt(ctx, text),
@@ -113,33 +109,32 @@ class GigaChatAiEngine @Inject constructor(
     }
 
     private fun systemPrompt(): String = """
-Ты — сценарист и гейм-мастер короткой, логичной и динамичной RPG (стиль: Reigns — лаконично, кинематографично).
-ТЫ ОБЯЗАН отвечать СТРОГО JSON без пояснений и без текста вокруг. Пиши ТОЛЬКО НА РУССКОМ ЯЗЫКЕ
-ВСЕГДА ровно 2 выбора.
-
-Обязательные поля JSON:
+Ты - ведущий мрачной RPG в историческом сеттинге (без фэнтези).
+История небанальная и развивается постепенно. Старт - необычное событие.
+Первая сцена - пролог: подробно опиши жизнь героя, мир вокруг, его имя, а также ясно озвучь цель героя на всю игру.
+Герой не может побеждать всех подряд или решать сложные задачи на старте. Рост и успех - постепенно.
+Каждый ход заканчивается двумя выборами игрока.
+Игра рассчитана минимум на 500 ходов.
+Вероятность гибели при неверном выборе - 10-15%.
+Должны быть сцены боя. Бой длится не более трех сцен. Герой выбирает оружие. Бой реалистичный.
+Нужны смена дня и ночи, еда/вода/сон. Нехватка может привести к гибели.
+Эпоху и атмосферу бери из контекста, не используй фэнтези-мотивы.
+Имя героя придумываешь случайно в прологе и сохраняешь консистентно дальше.
+В img_prmt обязательно передавай образ героя (внешность, одежда, детали), чтобы его можно было визуализировать.
+Добавляй больше логики в действиях: причины/следствия, небольшие проверки, цена ошибок.
+Первые два хода (turn=1 и turn=2) — пролог без выбора: var_left и var_right должны быть одинаковыми, например "Дальше".
+ВАЖНО!!! Генерировать изображение тебе НЕ нужно
+Отвечай строго JSON без лишнего текста. Поля и формат (scene_descr до 360 символов):
 {
-  "scene_text": "2–4 предложения, максимум 260 символов",
-  "choices": ["ровно 2 варианта (2–6 слов)", "ровно 2 варианта (2–6 слов)"],
-  "outcome_text": "0–2 предложения, максимум 140 символов",
-  "stat_changes": [{"key":"hp|stamina|gold|reputation","delta":-10..+10}] (может быть пустым),
-  "image_prompt": "одна строка (EN). Кратко описывает КАРТИНКУ текущей сцены. Без текста/логотипов/UI.",
-  "mode": "STORY или COMBAT"
+  "scene_descr": "подробное описание сцены",
+  "img_prmt": "подробное описание для генерации изображения (EN), без текста/логотипов/UI",
+  "var_left": "вариант выбора 1",
+  "var_right": "вариант выбора 2",
+  "music_type": "спокойный|напряжённый",
+  "day_weather": "время суток и погода",
+  "terrain": "название местности",
+  "turn": 1
 }
-
-Если mode="COMBAT", то добавь:
-"combat_outcome": "VICTORY или DEATH или ESCAPE"
-
-Правила боя:
-- В бою возможны ТОЛЬКО 3 исхода: победа, смерть, бегство.
-- DEATH редко и только если логично/опасно.
-- ESCAPE возможен, но имеет цену (stamina/репутация/золото).
-- VICTORY может давать добычу или репутацию.
-
-Сюжет:
-- Учитывай setting/era/location/tone и класс героя.
-- Делай причинно-следственные связи. Не телепортируй героя без причины.
-- Держи 1-2 постоянных крючка/антагониста/цель.
 """.trimIndent()
 
     private fun userPrompt(cur: String, choice: String, ctx: AiContext): String = """
@@ -151,10 +146,8 @@ location=${ctx.location}
 tone=${ctx.tone}
 
 HERO:
-name=${ctx.heroName}
 class=${ctx.heroClass}
 stats STR=${ctx.str}, AGI=${ctx.agi}, INT=${ctx.int}, CHA=${ctx.cha}
-
 CURRENT_SCENE:
 ${cur.ifBlank { "(none)" }}
 
@@ -162,8 +155,11 @@ PLAYER_CHOICE:
 $choice
 
 TASK:
-Сгенерируй следующую сцену. Логично продолжай сюжет. Если уместно — mode=COMBAT.
-Верни JSON со всеми обязательными полями, включая image_prompt (EN).
+Сгенерируй следующий ход в формате JSON, как в системе. Поддерживай связность сюжета.
+Если это пролог - начинай с необычного события, подробно введи героя и мир, и ясно озвучь его цель.
+Эпоха: ${ctx.era}. Учитывай эпоху в деталях мира, быта, языка и технологий.
+Добавляй реалистичные ограничения, потребности (еда/вода/сон) и смену времени суток/погоды.
+Всегда завершай ход двумя вариантами выбора. scene_descr максимум 360 символов.
 """.trimIndent()
 
     private fun parseSceneJson(content: String, ctx: AiContext): SceneJson {
@@ -172,13 +168,14 @@ TASK:
             .getOrElse {
                 Log.e(TAG, "SceneJson parse failed. Raw=${content.take(1200)}", it)
                 SceneJson(
-                    sceneText = (if (content.isBlank()) "Всё вспыхивает — действуй!" else content).take(260),
-                    choices = listOf("Рвануть вперёд", "Отступить"),
-                    outcomeText = "",
-                    statChanges = emptyList(),
-                    imagePrompt = buildFallbackImagePrompt(ctx, content),
-                    mode = "STORY",
-                    combatOutcome = null
+                    sceneDescr = (if (content.isBlank()) "Мир отвечает странной тишиной. Реальность дрожит, как тонкое стекло." else content).take(600),
+                    imgPrmt = buildFallbackImagePrompt(ctx, content),
+                    varLeft = "Продолжить путь",
+                    varRight = "Остановиться и осмотреться",
+                    musicType = "напряжённый",
+                    dayWeather = "ночь, моросящий дождь",
+                    terrain = "дорога у развалин",
+                    turn = ctx.step
                 )
             }
     }
@@ -200,11 +197,7 @@ TASK:
     }
 
     private fun buildFallbackImagePrompt(ctx: AiContext, sceneText: String): String {
-        val base = when (ctx.setting.uppercase()) {
-            "CYBERPUNK" -> "cinematic cyberpunk scene, neon rain, gritty streets"
-            "POSTAPOC" -> "cinematic post-apocalyptic scene, ruins, dust, dramatic light"
-            else -> "cinematic fantasy scene, dramatic light, detailed environment"
-        }
+        val base = "dark historical scene, realistic, cinematic lighting"
         return "$base, era ${ctx.era}, location ${ctx.location}, hero ${ctx.heroClass}. Scene: ${sceneText.take(120)}. No text, no watermark, no UI."
     }
 
@@ -215,7 +208,6 @@ TASK:
             if (now + 30_000 < cachedTokenExpiresAtMs) return token
         }
 
-        // If looks like JWT -> treat as ready bearer token
         val looksLikeJwt = keyOrToken.count { it == '.' } >= 2
         if (looksLikeJwt) {
             cachedToken = keyOrToken
@@ -287,19 +279,14 @@ TASK:
 
     @Serializable
     private data class SceneJson(
-        @SerialName("scene_text") val sceneText: String,
-        val choices: List<String> = emptyList(),
-        @SerialName("outcome_text") val outcomeText: String = "",
-        @SerialName("stat_changes") val statChanges: List<StatChangeJson> = emptyList(),
-        @SerialName("image_prompt") val imagePrompt: String = "",
-        val mode: String? = "STORY",
-        @SerialName("combat_outcome") val combatOutcome: String? = null
-    )
-
-    @Serializable
-    private data class StatChangeJson(
-        val key: String,
-        val delta: Int
+        @SerialName("scene_descr") val sceneDescr: String,
+        @SerialName("img_prmt") val imgPrmt: String,
+        @SerialName("var_left") val varLeft: String,
+        @SerialName("var_right") val varRight: String,
+        @SerialName("music_type") val musicType: String,
+        @SerialName("day_weather") val dayWeather: String,
+        @SerialName("terrain") val terrain: String,
+        val turn: Int
     )
 
     @Serializable
