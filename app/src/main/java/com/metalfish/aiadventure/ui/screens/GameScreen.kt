@@ -2,15 +2,22 @@ package com.metalfish.aiadventure.ui.screens
 
 import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -25,21 +32,22 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.metalfish.aiadventure.R
 import com.metalfish.aiadventure.domain.model.GameUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -51,8 +59,6 @@ fun GameScreen(
     onSettings: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
 
@@ -63,15 +69,10 @@ fun GameScreen(
             val leftChoice = state.choices.getOrNull(0) ?: "Лево"
             val rightChoice = state.choices.getOrNull(1) ?: "Право"
 
-            val bgFile = remember { File(File(context.cacheDir, "scene_images"), "background.jpg") }
-
-            val bgBitmap: State<ImageBitmap?> = produceState<ImageBitmap?>(initialValue = null, bgFile.exists()) {
-                value = withContext(Dispatchers.IO) {
-                    runCatching {
-                        if (!bgFile.exists()) return@runCatching null
-                        BitmapFactory.decodeFile(bgFile.absolutePath)?.asImageBitmap()
-                    }.getOrNull()
-                }
+            val bgRes = when (state.world.setting.name) {
+                "CYBERPUNK" -> R.drawable.bg_cyberpunk
+                "POSTAPOC" -> R.drawable.bg_postapoc
+                else -> R.drawable.bg_fantasy
             }
 
             val cardBitmap: State<ImageBitmap?> = produceState<ImageBitmap?>(initialValue = null, state.imagePath) {
@@ -85,24 +86,12 @@ fun GameScreen(
             }
 
             // BACKGROUND
-            if (bgBitmap.value != null) {
-                Image(
-                    bitmap = bgBitmap.value!!,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
-            } else {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(Color(0xFF0B0C12), Color(0xFF11142A), Color(0xFF0A0B10))
-                            )
-                        )
-                )
-            }
+            Image(
+                painter = painterResource(id = bgRes),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
 
             // Dark scrim
             Box(
@@ -133,6 +122,28 @@ fun GameScreen(
 
             val cardW = maxWidth * 0.86f
             val cardH = (cardW * (4f / 3f)).coerceAtMost(maxHeight * 0.80f)
+            val borderBrush = when (state.world.setting.name) {
+                "CYBERPUNK" -> Brush.linearGradient(
+                    listOf(Color(0xFF5BFAFF), Color(0xFF8A5CFF), Color(0xFFFF4BD1))
+                )
+                "POSTAPOC" -> Brush.linearGradient(
+                    listOf(Color(0xFFD49A53), Color(0xFF7A4A2A), Color(0xFFB65A3A))
+                )
+                else -> Brush.linearGradient(
+                    listOf(Color(0xFF7CFFB4), Color(0xFF4B8BFF), Color(0xFF9F6BFF))
+                )
+            }
+            val showLoading = state.isWaitingForResponse || state.isImageLoading
+            val spin = rememberInfiniteTransition(label = "loading")
+                .animateFloat(
+                    initialValue = 0f,
+                    targetValue = 360f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(900, easing = LinearEasing),
+                        repeatMode = RepeatMode.Restart
+                    ),
+                    label = "loadingSpin"
+                ).value
 
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
 
@@ -183,6 +194,7 @@ fun GameScreen(
                     modifier = Modifier
                         .size(cardW, cardH)
                         .clip(RoundedCornerShape(22.dp))
+                        .border(2.dp, borderBrush, RoundedCornerShape(22.dp))
                         .rotate(rotation)
                         .offset { IntOffset(drag.x.roundToInt(), drag.y.roundToInt()) }
                         .pointerInput(canSwipe, leftChoice, rightChoice) {
@@ -233,52 +245,80 @@ fun GameScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.25f))
+                        )
+                    }
+
+                    if (bmp != null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
                                 .background(
                                     Brush.verticalGradient(
-                                        listOf(Color(0xFF22263E), Color(0xFF14162A))
-                                    )
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (state.isImageLoading) CircularProgressIndicator(color = Color.White)
-                            else Text("Готовим сцену…", color = Color.White.copy(alpha = 0.85f))
-                        }
-                    }
-
-                    // overlay for text
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    colorStops = arrayOf(
-                                        0.0f to Color.Black.copy(alpha = 0.10f),
-                                        0.45f to Color.Black.copy(alpha = 0.40f),
-                                        1.0f to Color.Black.copy(alpha = 0.65f),
+                                        colorStops = arrayOf(
+                                            0.0f to Color.Black.copy(alpha = 0.10f),
+                                            0.45f to Color.Black.copy(alpha = 0.40f),
+                                            1.0f to Color.Black.copy(alpha = 0.65f),
+                                        )
                                     )
                                 )
-                            )
-                    )
+                        )
 
-                    // centered text, short & readable
-                    val t = state.sceneText.trim()
-                    val font = when {
-                        t.length <= 140 -> 20.sp
-                        t.length <= 260 -> 18.sp
-                        t.length <= 420 -> 16.sp
-                        else -> 15.sp
+                        val t = state.sceneText.trim()
+                        val font = when {
+                            t.length <= 140 -> 20.sp
+                            t.length <= 260 -> 18.sp
+                            t.length <= 420 -> 16.sp
+                            else -> 15.sp
+                        }
+
+                        Text(
+                            text = t,
+                            color = Color.White,
+                            fontSize = font,
+                            lineHeight = (font.value + 6).sp,
+                            textAlign = TextAlign.Center,
+                            maxLines = 9,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 18.dp)
+                        )
                     }
 
-                    Text(
-                        text = t,
-                        color = Color.White,
-                        fontSize = font,
-                        lineHeight = (font.value + 6).sp,
-                        textAlign = TextAlign.Center,
-                        maxLines = 9,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 18.dp)
-                    )
+                    AnimatedVisibility(
+                        visible = showLoading,
+                        enter = fadeIn(),
+                        exit = fadeOut()
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.35f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Canvas(
+                                modifier = Modifier
+                                    .size(72.dp)
+                                    .rotate(spin)
+                            ) {
+                                val stroke = Stroke(width = 6.dp.toPx())
+                                drawArc(
+                                    brush = borderBrush,
+                                    startAngle = 0f,
+                                    sweepAngle = 280f,
+                                    useCenter = false,
+                                    style = stroke
+                                )
+                            }
+                            Text(
+                                text = "Generating...",
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 13.sp,
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 16.dp)
+                            )
+                        }
+                    }
                 }
 
                 AnimatedVisibility(
@@ -299,3 +339,4 @@ fun GameScreen(
         }
     }
 }
+

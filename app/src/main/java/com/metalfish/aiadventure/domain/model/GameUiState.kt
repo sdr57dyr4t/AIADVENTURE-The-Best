@@ -9,6 +9,7 @@ data class GameUiState(
     val sceneText: String,
     val choices: List<String>,
     val isGameOver: Boolean,
+    val isWaitingForResponse: Boolean,
 
     val hero: HeroUi,
     val heroProfile: HeroProfileUi,
@@ -23,6 +24,7 @@ data class GameUiState(
             sceneText = "Ты стоишь на распутье. Приключение начинается.",
             choices = listOf("Пойти налево", "Пойти направо"),
             isGameOver = false,
+            isWaitingForResponse = false,
             hero = HeroUi(hp = 50, stamina = 30, gold = 10, reputation = 0),
 
             heroProfile = HeroProfileUi(

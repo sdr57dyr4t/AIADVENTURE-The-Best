@@ -37,13 +37,6 @@ class GameViewModel @Inject constructor(
     private val imagesDir: File by lazy {
         File(appContext.cacheDir, "scene_images").apply { mkdirs() }
     }
-
-    private val bgFile: File by lazy { File(imagesDir, "background.jpg") }
-    private val bgKeyFile: File by lazy { File(imagesDir, "background.key") }
-
-    /** Путь к текущему фону (для UI) */
-    fun backgroundPath(): String = bgFile.absolutePath
-
     fun setWorldTextContext(setting: String, era: String, location: String, tone: String) {
         val base = GameUiState.initial()
 
@@ -72,8 +65,6 @@ class GameViewModel @Inject constructor(
 
         prologueActive = true
         prologueStep = 0
-
-        ensureBackgroundForCurrentWorld()
         startPrologue()
     }
 
@@ -85,6 +76,7 @@ class GameViewModel @Inject constructor(
 
         viewModelScope.launch {
             Log.d(TAG, "PROLOGUE step=0 -> ai.nextTurn()")
+            _uiState.value = _uiState.value.copy(isWaitingForResponse = true)
             val result = runCatching {
                 ai.nextTurn(
                     currentSceneText = "",
@@ -96,7 +88,8 @@ class GameViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(
                     sceneText = "Ошибка пролога: ${it.message ?: "unknown"}",
                     choices = listOf("Продолжить", "Заново").take(2),
-                    isGameOver = false
+                    isGameOver = false,
+                    isWaitingForResponse = false
                 )
                 return@launch
             }
@@ -118,6 +111,7 @@ class GameViewModel @Inject constructor(
 
             viewModelScope.launch {
                 Log.d(TAG, "PROLOGUE step=$nextStep -> ai.nextTurn() choice=$choice")
+                _uiState.value = _uiState.value.copy(isWaitingForResponse = true)
                 val result = runCatching {
                     ai.nextTurn(
                         currentSceneText = _uiState.value.sceneText,
@@ -128,7 +122,8 @@ class GameViewModel @Inject constructor(
                     Log.e(TAG, "Prologue step=$nextStep failed: ${it.message}", it)
                     _uiState.value = _uiState.value.copy(
                         sceneText = "Ошибка пролога: ${it.message ?: "unknown"}",
-                        choices = _uiState.value.choices.take(2)
+                        choices = _uiState.value.choices.take(2),
+                        isWaitingForResponse = false
                     )
                     return@launch
                 }
@@ -149,6 +144,7 @@ class GameViewModel @Inject constructor(
 
         viewModelScope.launch {
             Log.d(TAG, "RUN -> ai.nextTurn() choice=$choice")
+            _uiState.value = _uiState.value.copy(isWaitingForResponse = true)
             val result = runCatching {
                 ai.nextTurn(
                     currentSceneText = _uiState.value.sceneText,
@@ -159,7 +155,8 @@ class GameViewModel @Inject constructor(
                 Log.e(TAG, "RUN failed: ${it.message}", it)
                 _uiState.value = _uiState.value.copy(
                     sceneText = "Ошибка генерации: ${it.message ?: "unknown"}",
-                    choices = _uiState.value.choices.take(2)
+                    choices = _uiState.value.choices.take(2),
+                        isWaitingForResponse = false
                 )
                 return@launch
             }
@@ -174,6 +171,7 @@ class GameViewModel @Inject constructor(
 
         viewModelScope.launch {
             Log.d(TAG, "RUN start after prologue -> ai.nextTurn CONTINUE")
+            _uiState.value = _uiState.value.copy(isWaitingForResponse = true)
             val result = runCatching {
                 ai.nextTurn(
                     currentSceneText = _uiState.value.sceneText,
@@ -182,6 +180,7 @@ class GameViewModel @Inject constructor(
                 )
             }.getOrElse {
                 Log.e(TAG, "Continue after prologue failed: ${it.message}", it)
+                _uiState.value = _uiState.value.copy(isWaitingForResponse = false)
                 return@launch
             }
 
@@ -244,44 +243,14 @@ class GameViewModel @Inject constructor(
             hero = hero1,
             sceneText = finalText,
             choices = result.choices.take(2),
-            isGameOver = gameOver
+            isGameOver = gameOver,
+            isWaitingForResponse = false
         )
 
         Log.d(TAG, "applyAiResult: mode=${result.mode} combat=${result.combatOutcome} hp=$hp gameOver=$gameOver")
     }
 
     // ---------------------- IMAGE GENERATION ----------------------
-
-    private fun ensureBackgroundForCurrentWorld() {
-        val s = _uiState.value
-        val key = bgKeyFor(s)
-        val existingKey = runCatching { bgKeyFile.takeIf { it.exists() }?.readText()?.trim() }.getOrNull()
-
-        if (bgFile.exists() && existingKey == key) return
-
-        runCatching { if (bgFile.exists()) bgFile.delete() }
-        runCatching { if (bgKeyFile.exists()) bgKeyFile.delete() }
-
-        val prompt = buildBackgroundPrompt(s)
-
-        viewModelScope.launch {
-            runCatching {
-                val bytes = images.generateImageBytes(
-                    prompt = prompt,
-                    width = 768,
-                    height = 1280,
-                    seed = stableSeed("bg:$key")
-                )
-                withContext(Dispatchers.IO) {
-                    bgFile.writeBytes(bytes)
-                    bgKeyFile.writeText(key)
-                }
-                Log.d(TAG, "Background generated key=$key path=${bgFile.absolutePath}")
-            }.onFailure {
-                Log.e(TAG, "Background generation failed: ${it.message}", it)
-            }
-        }
-    }
 
     private fun generateCardForPrompt(imagePrompt: String) {
         val prompt = imagePrompt.ifBlank {
@@ -331,29 +300,6 @@ class GameViewModel @Inject constructor(
     }
 
     // ---------------------- PROMPTS ----------------------
-
-    private fun bgKeyFor(s: GameUiState): String {
-        return "${s.world.setting.name}|${s.world.era}|${s.world.location}|${s.world.tone.name}"
-    }
-
-    private fun buildBackgroundPrompt(s: GameUiState): String {
-        val setting = s.world.setting.name
-        val tone = s.world.tone.name
-        val era = s.world.era
-        val location = s.world.location
-
-        val style = when (setting) {
-            "CYBERPUNK" -> "cinematic cyberpunk city background, neon rain, moody lighting"
-            "POSTAPOC" -> "cinematic post-apocalyptic wasteland background, ruins, dust, dramatic light"
-            else -> "cinematic fantasy landscape background, dramatic light, atmospheric"
-        }
-
-        return """
-$style.
-Era: $era. Location: $location. Tone: $tone.
-No text, no watermark, no logo, no UI. High quality digital painting.
-""".trimIndent()
-    }
 
     private fun buildCardFallbackPrompt(s: GameUiState, sceneText: String): String {
         val setting = s.world.setting.name
@@ -406,7 +352,8 @@ No text, no watermark, no UI. High quality digital painting.
         prologueActive = true
         prologueStep = 0
         _uiState.value = GameUiState.initial()
-        ensureBackgroundForCurrentWorld()
         startPrologue()
     }
 }
+
+
