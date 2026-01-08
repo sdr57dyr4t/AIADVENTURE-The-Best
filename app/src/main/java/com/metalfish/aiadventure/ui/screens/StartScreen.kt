@@ -64,7 +64,12 @@ fun StartScreen(
     }
 
     val dragThresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
-    val imageShape = RoundedCornerShape(20.dp)
+    val imageShape = RoundedCornerShape(
+        topStart = 46.dp,
+        topEnd = 46.dp,
+        bottomStart = 14.dp,
+        bottomEnd = 14.dp
+    )
     val borderColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f)
     val worlds = listOf(
         WorldCard(
@@ -280,6 +285,7 @@ private fun WorldImageCard(
                 painter = painterResource(id = world.imageRes),
                 contentDescription = world.setting,
                 contentScale = ContentScale.Crop,
+                alignment = Alignment.Center,
                 modifier = Modifier
                     .fillMaxSize()
                     .align(Alignment.Center)

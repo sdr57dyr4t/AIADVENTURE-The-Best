@@ -49,34 +49,23 @@ class GigaChatAiEngine @Inject constructor(
 
         val accessToken = getAccessToken(authKeyOrToken)
 
-        val req = ChatRequest(
-            model = "GigaChat-2-Max",
-            messages = listOf(
-                Msg(role = "system", content = systemPrompt()),
-                Msg(role = "user", content = userPrompt(currentSceneText, playerChoice, context))
-            ),
-            temperature = 0.85
-        )
+        val raw = requestRaw(
+            accessToken = accessToken,
+            userContent = userPrompt(currentSceneText, playerChoice, context)
+        ) ?: return fallbackTurn("Сеть отвечает странной тишиной. Реальность дрожит и не открывается.", context)
 
-        val responseText = http.post(chatUrl) {
-            header("Authorization", "Bearer $accessToken")
-            header("Accept", "application/json")
-            contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(ChatRequest.serializer(), req))
-        }.bodyAsText()
+        var scene = parseSceneJsonOrNull(raw)
+        if (scene == null) {
+            Log.w(TAG, "GigaChat returned non-JSON. Asking to regenerate.")
+            val retryRaw = requestRaw(accessToken, repairPrompt(raw))
+            scene = retryRaw?.let { parseSceneJsonOrNull(it) }
+        }
 
-        val resp = runCatching { json.decodeFromString(ChatResponse.serializer(), responseText) }
-            .getOrElse {
-                Log.e(TAG, "GigaChat parse ChatResponse failed. Raw=${responseText.take(2000)}", it)
-                return fallbackTurn("Сеть отвечает странной тишиной. Реальность дрожит и не открывается.", context)
-            }
+        if (scene == null) {
+            return fallbackTurn("Сеть отвечает странной тишиной. Реальность дрожит и не открывается.", context)
+        }
 
-        val raw = resp.choices.firstOrNull()?.message?.content.orEmpty().trim()
-        Log.d(TAG, "GigaChat content raw=${raw.take(400)}")
-
-        val scene = parseSceneJson(raw, context)
-
-        val isPrologueSwipe = context.phase.equals("PROLOGUE", ignoreCase = true) && context.step < 2
+        val isPrologueSwipe = context.phase.equals("PROLOGUE", ignoreCase = true) && context.step < 1
         val choices = if (isPrologueSwipe) {
             listOf("Дальше", "Дальше")
         } else {
@@ -86,7 +75,7 @@ class GigaChatAiEngine @Inject constructor(
         }
 
         return AiTurnResult(
-            sceneText = scene.sceneDescr.trim().take(360),
+            sceneText = scene.sceneDescr.trim().take(320),
             choices = choices,
             outcomeText = "",
             statChanges = emptyList(),
@@ -98,7 +87,7 @@ class GigaChatAiEngine @Inject constructor(
 
     private fun fallbackTurn(text: String, ctx: AiContext): AiTurnResult {
         return AiTurnResult(
-            sceneText = text.take(360),
+            sceneText = text.take(320),
             choices = listOf("Продолжить путь", "Остановиться и осмотреться"),
             outcomeText = "",
             statChanges = emptyList(),
@@ -109,75 +98,24 @@ class GigaChatAiEngine @Inject constructor(
     }
 
     private fun systemPrompt(): String = """
-Ты - ведущий мрачной RPG в историческом сеттинге (без фэнтези).
-История небанальная и развивается постепенно. Старт - необычное событие.
-Первая сцена - пролог: подробно опиши жизнь героя, мир вокруг, его имя, а также ясно озвучь цель героя на всю игру.
-Герой не может побеждать всех подряд или решать сложные задачи на старте. Рост и успех - постепенно.
-Каждый ход заканчивается двумя выборами игрока.
-Игра рассчитана минимум на 500 ходов.
-Вероятность гибели при неверном выборе - 10-15%.
-Должны быть сцены боя. Бой длится не более трех сцен. Герой выбирает оружие. Бой реалистичный.
-Нужны смена дня и ночи, еда/вода/сон. Нехватка может привести к гибели.
-Эпоху и атмосферу бери из контекста, не используй фэнтези-мотивы.
-Имя героя придумываешь случайно в прологе и сохраняешь консистентно дальше.
-В img_prmt обязательно передавай образ героя (внешность, одежда, детали), чтобы его можно было визуализировать.
-Добавляй больше логики в действиях: причины/следствия, небольшие проверки, цена ошибок.
-Первые два хода (turn=1 и turn=2) — пролог без выбора: var_left и var_right должны быть одинаковыми, например "Дальше".
-ВАЖНО!!! Генерировать изображение тебе НЕ нужно
-Отвечай строго JSON без лишнего текста. Поля и формат (scene_descr до 360 символов):
-{
-  "scene_descr": "подробное описание сцены",
-  "img_prmt": "подробное описание для генерации изображения (EN), без текста/логотипов/UI",
-  "var_left": "вариант выбора 1",
-  "var_right": "вариант выбора 2",
-  "music_type": "спокойный|напряжённый",
-  "day_weather": "время суток и погода",
-  "terrain": "название местности",
-  "turn": 1
-}
+Ты ведущий мрачной исторической RPG без фэнтези. Ответ строго JSON, без лишнего текста.
+Пролог (turn=1): 1 короткая сцена, назвать героя и цель, без выбора (var_left=var_right="Дальше").
+Далее: 2 выбора, риск смерти 10-15%, реализм, потребности (еда/вода/сон), день/ночь. Бои до 3 сцен.
+Имя героя неизменно. Эпоха/атмосфера из контекста. img_prmt: образ героя, EN, без текста/логотипов/UI.
+scene_descr<=320.
+{"scene_descr":"...","img_prmt":"...","var_left":"...","var_right":"...","music_type":"спокойный|напряжённый","day_weather":"...","terrain":"...","turn":1}
 """.trimIndent()
 
     private fun userPrompt(cur: String, choice: String, ctx: AiContext): String = """
-CONTEXT:
-phase=${ctx.phase}, step=${ctx.step}
-setting=${ctx.setting}
-era=${ctx.era}
-location=${ctx.location}
-tone=${ctx.tone}
-
-HERO:
-class=${ctx.heroClass}
-stats STR=${ctx.str}, AGI=${ctx.agi}, INT=${ctx.int}, CHA=${ctx.cha}
-CURRENT_SCENE:
-${cur.ifBlank { "(none)" }}
-
-PLAYER_CHOICE:
-$choice
-
-TASK:
-Сгенерируй следующий ход в формате JSON, как в системе. Поддерживай связность сюжета.
-Если это пролог - начинай с необычного события, подробно введи героя и мир, и ясно озвучь его цель.
-Эпоха: ${ctx.era}. Учитывай эпоху в деталях мира, быта, языка и технологий.
-Добавляй реалистичные ограничения, потребности (еда/вода/сон) и смену времени суток/погоды.
-Всегда завершай ход двумя вариантами выбора. scene_descr максимум 360 символов.
+CTX: phase=${ctx.phase}, step=${ctx.step}, setting=${ctx.setting}, era=${ctx.era}, location=${ctx.location}, tone=${ctx.tone}
+HERO: class=${ctx.heroClass}
+CURRENT: ${cur.take(220).ifBlank { "(none)" }}; CHOICE: $choice
+TASK: Следующий ход по системе, связность, 2 выбора, scene_descr<=320.
 """.trimIndent()
 
-    private fun parseSceneJson(content: String, ctx: AiContext): SceneJson {
-        val jsonBlock = extractJsonObject(content) ?: content
-        return runCatching { json.decodeFromString(SceneJson.serializer(), jsonBlock) }
-            .getOrElse {
-                Log.e(TAG, "SceneJson parse failed. Raw=${content.take(1200)}", it)
-                SceneJson(
-                    sceneDescr = (if (content.isBlank()) "Мир отвечает странной тишиной. Реальность дрожит, как тонкое стекло." else content).take(600),
-                    imgPrmt = buildFallbackImagePrompt(ctx, content),
-                    varLeft = "Продолжить путь",
-                    varRight = "Остановиться и осмотреться",
-                    musicType = "напряжённый",
-                    dayWeather = "ночь, моросящий дождь",
-                    terrain = "дорога у развалин",
-                    turn = ctx.step
-                )
-            }
+    private fun parseSceneJsonOrNull(content: String): SceneJson? {
+        val jsonBlock = extractJsonObject(content) ?: return null
+        return runCatching { json.decodeFromString(SceneJson.serializer(), jsonBlock) }.getOrNull()
     }
 
     private fun extractJsonObject(text: String): String? {
@@ -194,6 +132,37 @@ TASK:
             }
         }
         return null
+    }
+
+    private fun repairPrompt(raw: String): String =
+        "Ответь строго JSON по формату из системы. Исправь и верни только JSON. Твой прошлый ответ:\n$raw"
+
+    private suspend fun requestRaw(accessToken: String, userContent: String): String? {
+        val req = ChatRequest(
+            model = "GigaChat-2",
+            messages = listOf(
+                Msg(role = "system", content = systemPrompt()),
+                Msg(role = "user", content = userContent)
+            ),
+            temperature = 0.85
+        )
+
+        val responseText = http.post(chatUrl) {
+            header("Authorization", "Bearer $accessToken")
+            header("Accept", "application/json")
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(ChatRequest.serializer(), req))
+        }.bodyAsText()
+
+        val resp = runCatching { json.decodeFromString(ChatResponse.serializer(), responseText) }
+            .getOrElse {
+                Log.e(TAG, "GigaChat parse ChatResponse failed. Raw=${responseText.take(2000)}", it)
+                return null
+            }
+
+        val raw = resp.choices.firstOrNull()?.message?.content.orEmpty().trim()
+        Log.d(TAG, "GigaChat content raw=${raw.take(400)}")
+        return raw.ifBlank { null }
     }
 
     private fun buildFallbackImagePrompt(ctx: AiContext, sceneText: String): String {
