@@ -33,6 +33,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -40,6 +43,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -108,7 +112,7 @@ fun GameScreen(
             )
 
             val hasCard = cardBitmap.value != null
-            val canSwipe = hasCard && !state.isImageLoading && !state.isGameOver
+            val canSwipe = !state.isImageLoading && !state.isGameOver
 
             var drag by remember { mutableStateOf(Offset.Zero) }
             val rotation = ((drag.x / widthPx) * 9f).coerceIn(-10f, 10f)
@@ -122,6 +126,11 @@ fun GameScreen(
 
             val cardW = maxWidth * 0.86f
             val cardH = (cardW * (4f / 3f)).coerceAtMost(maxHeight * 0.80f)
+            val textMeasurer = rememberTextMeasurer()
+            val textPadding = 18.dp
+            val contentWidthPx = with(LocalDensity.current) {
+                (cardW - (textPadding * 2)).toPx().toInt().coerceAtLeast(1)
+            }
             val borderBrush = when (state.world.setting.name) {
                 "CYBERPUNK" -> Brush.linearGradient(
                     listOf(Color(0xFF5BFAFF), Color(0xFF8A5CFF), Color(0xFFFF4BD1))
@@ -147,7 +156,39 @@ fun GameScreen(
 
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
 
+                val fullText = state.sceneText.trim()
+                val font = when {
+                    fullText.length <= 180 -> 20.sp
+                    fullText.length <= 320 -> 18.sp
+                    fullText.length <= 520 -> 16.sp
+                    else -> 14.sp
+                }
+                val textStyle = TextStyle(
+                    fontSize = font,
+                    lineHeight = (font.value + 4).sp
+                )
+                var pageIndex by remember(fullText) { mutableStateOf(0) }
+                val pages = remember(fullText, contentWidthPx, font) {
+                    paginateText(
+                        text = fullText,
+                        textMeasurer = textMeasurer,
+                        style = textStyle,
+                        maxWidthPx = contentWidthPx,
+                        maxLines = 12
+                    )
+                }
+                val hasMorePages = pages.size > 1 && pageIndex < pages.lastIndex
+                val pageText = pages.getOrNull(pageIndex).orEmpty()
+
                 // Hint (shows while swiping)
+                val hintText = when {
+                    hasMorePages -> "Читать далее"
+                    drag.x <= -10f -> leftChoice
+                    drag.x >= 10f -> rightChoice
+                    else -> ""
+                }
+                val hintAlpha = ((abs(drag.x) / threshold).coerceIn(0f, 1f) * 0.95f)
+
                 AnimatedVisibility(
                     visible = hintText.isNotBlank() && canSwipe,
                     enter = fadeIn(),
@@ -193,6 +234,17 @@ fun GameScreen(
                                 },
                                 onDragEnd = {
                                     val dx = drag.x
+                                    if (hasMorePages) {
+                                        if (abs(dx) >= threshold * 0.35f) {
+                                            scope.launch {
+                                                pageIndex = (pageIndex + 1).coerceAtMost(pages.lastIndex)
+                                                drag = Offset.Zero
+                                            }
+                                        } else {
+                                            scope.launch { drag = Offset.Zero }
+                                        }
+                                        return@detectDragGestures
+                                    }
                                     if (dx <= -threshold) {
                                         val picked = "LEFT: $leftChoice"
                                         scope.launch {
@@ -217,7 +269,8 @@ fun GameScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     val bmp = cardBitmap.value
-                    if (bmp != null && !showLoading) {
+                    val showText = !showLoading
+                    if (bmp != null && showText) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -238,7 +291,7 @@ fun GameScreen(
                         )
                     }
 
-                    if (bmp != null && !showLoading) {
+                    if (showText) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -253,24 +306,38 @@ fun GameScreen(
                                 )
                         )
 
-                        val t = state.sceneText.trim()
-                        val font = when {
-                            t.length <= 180 -> 20.sp
-                            t.length <= 320 -> 18.sp
-                            t.length <= 520 -> 16.sp
-                            else -> 14.sp
-                        }
-
                         Text(
-                            text = t,
+                            text = pageText,
                             color = Color.White,
                             fontSize = font,
                             lineHeight = (font.value + 4).sp,
                             textAlign = TextAlign.Center,
                             maxLines = 12,
                             overflow = TextOverflow.Clip,
-                            modifier = Modifier.padding(horizontal = 18.dp)
+                            modifier = Modifier.padding(horizontal = textPadding)
                         )
+                    }
+
+                    AnimatedVisibility(
+                        visible = hasMorePages && !showLoading,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 14.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(Color.Black.copy(alpha = 0.35f))
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = "Читать далее",
+                                color = Color.White,
+                                fontSize = 13.sp
+                            )
+                        }
                     }
 
                     AnimatedVisibility(
@@ -322,5 +389,59 @@ fun GameScreen(
             }
         }
     }
+}
+
+private fun paginateText(
+    text: String,
+    textMeasurer: androidx.compose.ui.text.TextMeasurer,
+    style: TextStyle,
+    maxWidthPx: Int,
+    maxLines: Int
+): List<String> {
+    val clean = text.trim()
+    if (clean.isBlank()) return listOf("")
+    val pages = mutableListOf<String>()
+    val constraints = Constraints(maxWidth = maxWidthPx)
+    var start = 0
+
+    while (start < clean.length) {
+        while (start < clean.length && clean[start].isWhitespace()) start++
+        if (start >= clean.length) break
+
+        var low = start + 1
+        var high = clean.length
+        var best = start + 1
+
+        while (low <= high) {
+            val mid = (low + high) / 2
+            val candidateEnd = findBreak(clean, start, mid)
+            val slice = clean.substring(start, candidateEnd)
+            val result = textMeasurer.measure(
+                text = AnnotatedString(slice),
+                style = style,
+                constraints = constraints
+            )
+            if (result.lineCount <= maxLines) {
+                best = candidateEnd
+                low = mid + 1
+            } else {
+                high = mid - 1
+            }
+        }
+
+        if (best <= start) {
+            best = (start + 1).coerceAtMost(clean.length)
+        }
+        pages.add(clean.substring(start, best).trim())
+        start = best
+    }
+
+    return pages.ifEmpty { listOf(clean) }
+}
+
+private fun findBreak(text: String, start: Int, end: Int): Int {
+    if (end >= text.length) return text.length
+    val cut = text.lastIndexOfAny(charArrayOf(' ', '\n', '\t'), startIndex = end - 1)
+    return if (cut > start) cut + 1 else end
 }
 

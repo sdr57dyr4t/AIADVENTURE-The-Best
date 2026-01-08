@@ -36,6 +36,8 @@ class GigaChatAiEngine @Inject constructor(
 
     @Volatile private var cachedToken: String? = null
     @Volatile private var cachedTokenExpiresAtMs: Long = 0L
+    @Volatile private var systemPromptSent: Boolean = false
+    private val conversation: MutableList<Msg> = mutableListOf()
 
     override suspend fun nextTurn(
         currentSceneText: String,
@@ -43,6 +45,10 @@ class GigaChatAiEngine @Inject constructor(
         context: AiContext
     ): AiTurnResult {
         Log.d(TAG, "GigaChatAiEngine.nextTurn CALLED phase=${context.phase} step=${context.step}")
+        if (context.phase.equals("PROLOGUE", ignoreCase = true) && context.step == 0 && playerChoice == "START") {
+            systemPromptSent = false
+            conversation.clear()
+        }
 
         val authKeyOrToken = BuildConfig.GIGACHAT_AUTH_KEY.trim()
         require(authKeyOrToken.isNotBlank()) { "GIGACHAT_AUTH_KEY is empty. Put it into local.properties and rebuild." }
@@ -65,14 +71,9 @@ class GigaChatAiEngine @Inject constructor(
             return fallbackTurn("Сеть отвечает странной тишиной. Реальность дрожит и не открывается.", context)
         }
 
-        val isPrologueSwipe = context.phase.equals("PROLOGUE", ignoreCase = true) && context.step < 1
-        val choices = if (isPrologueSwipe) {
-            listOf("Дальше", "Дальше")
-        } else {
-            listOf(scene.varLeft, scene.varRight).map { it.trim() }.filter { it.isNotBlank() }
-                .take(2)
-                .ifEmpty { listOf("Продолжить путь", "Остановиться и осмотреться") }
-        }
+        val choices = listOf(scene.varLeft, scene.varRight).map { it.trim() }.filter { it.isNotBlank() }
+            .take(2)
+            .ifEmpty { listOf("Продолжить путь", "Остановиться и осмотреться") }
 
         return AiTurnResult(
             sceneText = scene.sceneDescr.trim().take(320),
@@ -98,24 +99,34 @@ class GigaChatAiEngine @Inject constructor(
     }
 
     private fun systemPrompt(): String = """
-Ты ведущий мрачной исторической RPG без фэнтези. Ответ строго JSON, без лишнего текста.
-Пролог (turn=1): 1 короткая сцена, назвать героя и цель, без выбора (var_left=var_right="Дальше").
-Далее: 2 выбора, риск смерти 10-15%, реализм, потребности (еда/вода/сон), день/ночь. Бои до 3 сцен.
-Имя героя неизменно. Эпоха/атмосфера из контекста. img_prmt: образ героя, EN, без текста/логотипов/UI.
-scene_descr<=320.
-{"scene_descr":"...","img_prmt":"...","var_left":"...","var_right":"...","music_type":"спокойный|напряжённый","day_weather":"...","terrain":"...","turn":1}
+Играем в текстовую rpg игру в мрачном фэнтезийном сеттинге, соответствующем средневековью. 
+Придумай сюжет. Сюжет должен быть небанальным и развиваться постепенно. Старт сюжета - какое то необычное событие.
+Первая сцена игры - пролог. Где подробно опиши предысторию, мир вокруг, главного героя, его имя и цель.
+Главный герой не может на первых ходах сразу побеждать всех противников или разгадывать сложные квесты - это должно происходить по мере развития сюжета. 
+После пролога начинается игра - ты описываешь сцену и варианты действий. Я выбираю один из двух вариантов. Игра должна проходиться не менее чем за 500 ходов. Одна сцена - один ход.
+Во время игры персонаж может погибнуть, если игрок сделает неверный выбор. 
+Должны присутствовать сцены боя. Бой должен длиться не больше пяти ходов, на первом ходе боя я должен выбрать оружие. Нельзя использовать оружие, которого у тебя нет. Бой должен быть реалистичным - персонаж не может голыми руками одолеть нескольких противников.
+Добавь смену дня и ночи. А также смену погоды.
+Персонаж должен есть, пить и спать. Недостаток сна или еды может привести к гибели персонажа.
+Ответ возвращай строго в формате JSON, без переносов строк внутри значений.
+Ответ верни JSON с полями из кода: sceneDescr, imgPrmt, varLeft, varRight, musicType, dayWeather, terrain, turn
 """.trimIndent()
 
-    private fun userPrompt(cur: String, choice: String, ctx: AiContext): String = """
-CTX: phase=${ctx.phase}, step=${ctx.step}, setting=${ctx.setting}, era=${ctx.era}, location=${ctx.location}, tone=${ctx.tone}
-HERO: class=${ctx.heroClass}
-CURRENT: ${cur.take(220).ifBlank { "(none)" }}; CHOICE: $choice
-TASK: Следующий ход по системе, связность, 2 выбора, scene_descr<=320.
-""".trimIndent()
+    private fun userPrompt(cur: String, choice: String, ctx: AiContext): String =
+        choice.trim().ifBlank { "CONTINUE" }
 
     private fun parseSceneJsonOrNull(content: String): SceneJson? {
         val jsonBlock = extractJsonObject(content) ?: return null
-        return runCatching { json.decodeFromString(SceneJson.serializer(), jsonBlock) }.getOrNull()
+        return runCatching { json.decodeFromString(SceneJson.serializer(), jsonBlock) }
+            .getOrNull()
+            ?: runCatching {
+                val sanitized = sanitizeJsonStringNewlines(jsonBlock)
+                json.decodeFromString(SceneJson.serializer(), sanitized)
+            }.getOrNull()
+            ?: runCatching {
+                val normalized = normalizeSnakeKeys(sanitizeJsonStringNewlines(jsonBlock))
+                json.decodeFromString(SceneJson.serializer(), normalized)
+            }.getOrNull()
     }
 
     private fun extractJsonObject(text: String): String? {
@@ -135,15 +146,64 @@ TASK: Следующий ход по системе, связность, 2 вы�
     }
 
     private fun repairPrompt(raw: String): String =
-        "Ответь строго JSON по формату из системы. Исправь и верни только JSON. Твой прошлый ответ:\n$raw"
+        "Ответь строго JSON по формату из системы. Без переносов строк внутри значений. " +
+            "Экранируй кавычки и спецсимволы. Верни только JSON. Твой прошлый ответ:\n$raw"
+
+    private fun sanitizeJsonStringNewlines(jsonText: String): String {
+        val out = StringBuilder(jsonText.length + 16)
+        var inString = false
+        var escaped = false
+        for (ch in jsonText) {
+            if (escaped) {
+                out.append(ch)
+                escaped = false
+                continue
+            }
+            when (ch) {
+                '\\' -> {
+                    out.append(ch)
+                    escaped = true
+                }
+                '"' -> {
+                    out.append(ch)
+                    inString = !inString
+                }
+                '\n', '\r' -> {
+                    if (inString) {
+                        out.append("\\n")
+                    } else {
+                        out.append(ch)
+                    }
+                }
+                else -> out.append(ch)
+            }
+        }
+        return out.toString()
+    }
+
+    private fun normalizeSnakeKeys(jsonText: String): String {
+        return jsonText
+            .replace("\"scene_descr\"", "\"sceneDescr\"")
+            .replace("\"img_prmt\"", "\"imgPrmt\"")
+            .replace("\"var_left\"", "\"varLeft\"")
+            .replace("\"var_right\"", "\"varRight\"")
+            .replace("\"music_type\"", "\"musicType\"")
+            .replace("\"day_weather\"", "\"dayWeather\"")
+            .replace("\"terrain\"", "\"terrain\"")
+            .replace("\"turn\"", "\"turn\"")
+    }
 
     private suspend fun requestRaw(accessToken: String, userContent: String): String? {
+        if (!systemPromptSent) {
+            conversation.clear()
+            conversation.add(Msg(role = "system", content = systemPrompt()))
+        }
+        conversation.add(Msg(role = "user", content = userContent))
+        val msgs = conversation.toList()
+        Log.d(TAG, "GigaChat request: systemSent=$systemPromptSent userContent=${userContent.take(400)}")
         val req = ChatRequest(
             model = "GigaChat-2",
-            messages = listOf(
-                Msg(role = "system", content = systemPrompt()),
-                Msg(role = "user", content = userContent)
-            ),
+            messages = msgs,
             temperature = 0.85
         )
 
@@ -162,6 +222,10 @@ TASK: Следующий ход по системе, связность, 2 вы�
 
         val raw = resp.choices.firstOrNull()?.message?.content.orEmpty().trim()
         Log.d(TAG, "GigaChat content raw=${raw.take(400)}")
+        systemPromptSent = true
+        if (raw.isNotBlank()) {
+            conversation.add(Msg(role = "assistant", content = raw))
+        }
         return raw.ifBlank { null }
     }
 
@@ -248,12 +312,12 @@ TASK: Следующий ход по системе, связность, 2 вы�
 
     @Serializable
     private data class SceneJson(
-        @SerialName("scene_descr") val sceneDescr: String,
-        @SerialName("img_prmt") val imgPrmt: String,
-        @SerialName("var_left") val varLeft: String,
-        @SerialName("var_right") val varRight: String,
-        @SerialName("music_type") val musicType: String,
-        @SerialName("day_weather") val dayWeather: String,
+        @SerialName("sceneDescr") val sceneDescr: String,
+        @SerialName("imgPrmt") val imgPrmt: String,
+        @SerialName("varLeft") val varLeft: String,
+        @SerialName("varRight") val varRight: String,
+        @SerialName("musicType") val musicType: String,
+        @SerialName("dayWeather") val dayWeather: String,
         @SerialName("terrain") val terrain: String,
         val turn: Int
     )
