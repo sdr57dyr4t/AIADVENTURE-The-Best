@@ -46,6 +46,10 @@ class FakeAiEngine : AiEngine {
             sceneText = scene,
             choices = listOf(left, right),
             outcomeText = outcome,
+            sceneName = "Сцена",
+            dayWeather = "День, ясно",
+            terrain = "Равнина",
+            deadPrc = 10,
             statChanges = changes
         )
     }

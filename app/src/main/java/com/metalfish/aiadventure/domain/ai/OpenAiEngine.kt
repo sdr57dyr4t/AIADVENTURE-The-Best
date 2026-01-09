@@ -18,6 +18,10 @@ class OpenAiEngine : AiEngine {
             sceneText = "OpenAI Engine не подключён. Используй GigaChat/FakeAiEngine.",
             choices = listOf("LEFT: Ок", "RIGHT: Ок"),
             outcomeText = "Заглушка.",
+            sceneName = "",
+            dayWeather = "",
+            terrain = "",
+            deadPrc = null,
             statChanges = listOf(StatChange("reputation", 0))
         )
     }

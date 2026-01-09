@@ -243,6 +243,10 @@ class GameViewModel @Inject constructor(
             hero = hero1,
             sceneText = finalText,
             choices = result.choices.take(2),
+            sceneName = result.sceneName,
+            dayWeather = result.dayWeather,
+            terrain = result.terrain,
+            deadPrc = result.deadPrc,
             isGameOver = gameOver,
             isWaitingForResponse = false
         )

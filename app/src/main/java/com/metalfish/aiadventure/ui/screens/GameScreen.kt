@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -162,6 +163,12 @@ fun GameScreen(
             }
             val hintBg = choiceBg
             val hintBorderBrush = choiceBorderBrush
+            val statusBg = when (settingName) {
+                "CYBERPUNK" -> Color.Black.copy(alpha = 0.55f)
+                "POSTAPOC" -> Color(0xFF141414).copy(alpha = 0.65f)
+                else -> Color(0xFF241A12).copy(alpha = 0.55f)
+            }
+            val statusBorderBrush = choiceBorderBrush
             val showLoading = state.isWaitingForResponse || state.isImageLoading
             val spin = rememberInfiniteTransition(label = "loading")
                 .animateFloat(
@@ -284,6 +291,18 @@ fun GameScreen(
                         val rustSpots = remember {
                             List(160) { Offset(Random.nextFloat(), Random.nextFloat()) }
                         }
+                        val dents = remember {
+                            List(36) { Offset(Random.nextFloat(), Random.nextFloat()) }
+                        }
+                        val scratches = remember {
+                            List(40) {
+                                val x1 = Random.nextFloat()
+                                val y1 = Random.nextFloat()
+                                val x2 = (x1 + (Random.nextFloat() - 0.5f) * 0.2f).coerceIn(0f, 1f)
+                                val y2 = (y1 + (Random.nextFloat() - 0.5f) * 0.2f).coerceIn(0f, 1f)
+                                Offset(x1, y1) to Offset(x2, y2)
+                            }
+                        }
                         Canvas(modifier = Modifier.fillMaxSize()) {
                             val stroke = 8.dp.toPx()
                             val border = 12.dp.toPx()
@@ -317,56 +336,76 @@ fun GameScreen(
                                     val ry = p.y * h
                                     drawCircle(rust, radius = 3.dp.toPx(), center = Offset(rx, ry))
                                 }
+
+                                val dentDark = Color(0xFF2A1A0E).copy(alpha = 0.45f)
+                                val dentLight = Color(0xFFFFD27A).copy(alpha = 0.25f)
+                                dents.forEach { p ->
+                                    val rx = p.x * w
+                                    val ry = p.y * h
+                                    val r = (4.dp + (p.x * 4f).dp).toPx()
+                                    drawCircle(dentDark, radius = r, center = Offset(rx, ry))
+                                    drawCircle(dentLight, radius = r * 0.55f, center = Offset(rx + r * 0.2f, ry + r * 0.15f))
+                                }
+
+                                val scratchLight = Color(0xFFFFE6A0).copy(alpha = 0.35f)
+                                val scratchDark = Color(0xFF3A2A18).copy(alpha = 0.35f)
+                                scratches.forEach { (a, b) ->
+                                    val p1 = Offset(a.x * w, a.y * h)
+                                    val p2 = Offset(b.x * w, b.y * h)
+                                    drawLine(scratchDark, p1, p2, strokeWidth = 2.dp.toPx())
+                                    drawLine(scratchLight, p1 + Offset(1.dp.toPx(), 1.dp.toPx()), p2 + Offset(1.dp.toPx(), 1.dp.toPx()), strokeWidth = 1.dp.toPx())
+                                }
                             }
                         }
                     } else if (settingName != "CYBERPUNK") {
-                        data class Knot(val edge: Int, val t: Float, val inset: Float, val radius: Float)
-                        val knots = remember {
-                            List(28) {
-                                Knot(
+                        data class Speck(val edge: Int, val t: Float, val inset: Float, val radius: Float, val alpha: Float)
+                        val specks = remember {
+                            List(120) {
+                                Speck(
                                     edge = Random.nextInt(4),
                                     t = Random.nextFloat(),
                                     inset = Random.nextFloat(),
-                                    radius = 2f + Random.nextFloat() * 5f
+                                    radius = 1.5f + Random.nextFloat() * 3.5f,
+                                    alpha = 0.18f + Random.nextFloat() * 0.25f
                                 )
                             }
                         }
                         Canvas(modifier = Modifier.fillMaxSize()) {
-                            val plank = 12.dp.toPx()
-                            val wood = Color(0xFF6A4528)
-                            val woodDark = Color(0xFF3E2816)
-                            val grain = Color(0xFF8A5A36).copy(alpha = 0.35f)
                             val w = size.width
                             val h = size.height
+                            val outer = 12.dp.toPx()
+                            val mid = 8.dp.toPx()
+                            val inner = 4.dp.toPx()
 
-                            drawRect(wood, topLeft = Offset(0f, 0f), size = androidx.compose.ui.geometry.Size(w, plank))
-                            drawRect(wood, topLeft = Offset(0f, h - plank), size = androidx.compose.ui.geometry.Size(w, plank))
-                            drawRect(wood, topLeft = Offset(0f, plank), size = androidx.compose.ui.geometry.Size(plank, h - 2 * plank))
-                            drawRect(wood, topLeft = Offset(w - plank, plank), size = androidx.compose.ui.geometry.Size(plank, h - 2 * plank))
+                            val dark = Color(0xFF3C2514)
+                            val base = Color(0xFF7A4C26)
+                            val gold = Color(0xFFC9A25A)
+                            val highlight = Color(0xFFE4C983)
+                            val shadow = Color(0xFF2A1A0E)
 
-                            repeat(6) { i ->
-                                val y = plank * 0.35f + i * 3.dp.toPx()
-                                drawLine(grain, Offset(0f, y), Offset(w, y), strokeWidth = 1.5.dp.toPx())
-                                val yb = h - plank * 0.35f - i * 3.dp.toPx()
-                                drawLine(grain, Offset(0f, yb), Offset(w, yb), strokeWidth = 1.5.dp.toPx())
-                            }
-                            repeat(6) { i ->
-                                val x = plank * 0.35f + i * 3.dp.toPx()
-                                drawLine(grain, Offset(x, 0f), Offset(x, h), strokeWidth = 1.5.dp.toPx())
-                                val xr = w - plank * 0.35f - i * 3.dp.toPx()
-                                drawLine(grain, Offset(xr, 0f), Offset(xr, h), strokeWidth = 1.5.dp.toPx())
-                            }
+                            drawRect(dark, size = size, style = Stroke(width = outer))
+                            drawRect(base, size = size, style = Stroke(width = mid))
+                            drawRect(gold, size = size, style = Stroke(width = inner))
 
-                            drawRect(woodDark, size = size, style = Stroke(width = 2.dp.toPx()))
+                            val inset = outer * 0.85f
+                            drawRect(shadow, topLeft = Offset(inset, inset), size = size.copy(width = w - inset * 2, height = h - inset * 2), style = Stroke(width = 2.dp.toPx()))
+                            drawRect(highlight, topLeft = Offset(inset + 2.dp.toPx(), inset + 2.dp.toPx()), size = size.copy(width = w - (inset + 2.dp.toPx()) * 2, height = h - (inset + 2.dp.toPx()) * 2), style = Stroke(width = 1.5.dp.toPx()))
 
-                            knots.forEach { k ->
-                                val pos = when (k.edge) {
-                                    0 -> Offset(k.t * w, plank * (0.35f + 0.45f * k.inset))
-                                    1 -> Offset(w - plank * (0.35f + 0.45f * k.inset), k.t * h)
-                                    2 -> Offset(k.t * w, h - plank * (0.35f + 0.45f * k.inset))
-                                    else -> Offset(plank * (0.35f + 0.45f * k.inset), k.t * h)
+                            val corner = outer * 1.2f
+                            val cornerStroke = Stroke(width = 2.dp.toPx())
+                            drawCircle(highlight, radius = corner, center = Offset(outer * 0.9f, outer * 0.9f), style = cornerStroke)
+                            drawCircle(highlight, radius = corner, center = Offset(w - outer * 0.9f, outer * 0.9f), style = cornerStroke)
+                            drawCircle(highlight, radius = corner, center = Offset(outer * 0.9f, h - outer * 0.9f), style = cornerStroke)
+                            drawCircle(highlight, radius = corner, center = Offset(w - outer * 0.9f, h - outer * 0.9f), style = cornerStroke)
+
+                            specks.forEach { s ->
+                                val pos = when (s.edge) {
+                                    0 -> Offset(s.t * w, outer * (0.4f + 0.5f * s.inset))
+                                    1 -> Offset(w - outer * (0.4f + 0.5f * s.inset), s.t * h)
+                                    2 -> Offset(s.t * w, h - outer * (0.4f + 0.5f * s.inset))
+                                    else -> Offset(outer * (0.4f + 0.5f * s.inset), s.t * h)
                                 }
-                                drawCircle(woodDark, radius = k.radius.dp.toPx(), center = pos)
+                                drawCircle(gold.copy(alpha = s.alpha), radius = s.radius.dp.toPx(), center = pos)
                             }
                         }
                     }
@@ -386,6 +425,32 @@ fun GameScreen(
                                 )
                         )
 
+                        if (state.sceneName.isNotBlank()) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(top = 10.dp, start = 12.dp, end = 12.dp)
+                                    .fillMaxWidth()
+                                    .background(hintBg, cardShape)
+                                    .let {
+                                        if (settingName == "CYBERPUNK") {
+                                            it.border(2.dp, hintBorderBrush, cardShape)
+                                        } else it
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = state.sceneName.trim(),
+                                    color = Color.White,
+                                    fontSize = 14.sp,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+
                         val textScroll = rememberScrollState()
                         val t = state.sceneText.trim()
                         val font = 18.sp
@@ -399,6 +464,7 @@ fun GameScreen(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(horizontal = textPadding)
+                                .padding(top = 56.dp, bottom = 84.dp)
                                 .verticalScroll(textScroll),
                             contentAlignment = Alignment.Center
                         ) {
@@ -412,6 +478,64 @@ fun GameScreen(
                                 overflow = TextOverflow.Clip,
                                 modifier = Modifier.fillMaxWidth()
                             )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 10.dp, start = 12.dp, end = 12.dp)
+                                .fillMaxWidth()
+                                .background(statusBg, cardShape)
+                                .let {
+                                    if (settingName == "CYBERPUNK") {
+                                        it.border(2.dp, statusBorderBrush, cardShape)
+                                    } else it
+                                }
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            val deadPrc = state.deadPrc
+                            val level = when {
+                                deadPrc == null -> -1
+                                deadPrc <= 33 -> 0
+                                deadPrc <= 66 -> 1
+                                else -> 2
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = state.dayWeather.trim().ifBlank { "-" },
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = state.terrain.trim().ifBlank { "-" },
+                                        color = Color.White.copy(alpha = 0.85f),
+                                        fontSize = 12.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+
+                                Column(
+                                    modifier = Modifier.padding(start = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    val red = if (level == 2) Color(0xFFFF4D4D) else Color(0x55FF4D4D)
+                                    val yellow = if (level == 1) Color(0xFFFFC107) else Color(0x55FFC107)
+                                    val green = if (level == 0) Color(0xFF5CFF7A) else Color(0x555CFF7A)
+                                    Box(Modifier.size(10.dp).background(red, CircleShape))
+                                    Box(Modifier.size(10.dp).background(yellow, CircleShape))
+                                    Box(Modifier.size(10.dp).background(green, CircleShape))
+                                }
+                            }
                         }
                     }
 
@@ -440,16 +564,34 @@ fun GameScreen(
                                     style = stroke
                                 )
                             }
-                            val loadingText = remember {
-                                listOf(
-                                    "Прокладываю маршрут…",
-                                    "Собираю артефакты…",
-                                    "Поджигаю неон…",
-                                    "Шью мир по нитям…",
-                                    "Пыль оседает…"
-                                ).random()
+                            val loadingText = remember(settingName) {
+                                val lines = when (settingName) {
+                                    "CYBERPUNK" -> listOf(
+                                        "Неон шипит в дождь. Сканирую узел...”" ,
+                                        "Прокси-зонд в работе. Держи линию.",
+                                        "Сеть трещит. Подгружаю фрагменты реальности...",
+                                        "Дрон-курьер несет данные. Еще секунда.",
+                                        "Лед трещит под трассировкой. Жди сигнала."
+                                    )
+                                    "POSTAPOC" -> listOf(
+                                        "Пыль в эфире. Собираю обрывки хроник...",
+                                        "Старая антенна ловит шум. Подождем.",
+                                        "Генератор кашляет. Данные на подходе.",
+                                        "Ржавый терминал оживает. Еще немного.",
+                                        "Ветер завывает. Радио шепчет ответы..."
+                                    )
+                                    else -> listOf(
+                                        "Скрипят страницы. Летописец пишет...",
+                                        "Огонь в очаге мерцает. Сказание рождается.",
+                                        "Ветер несет вести. Терпи мгновение.",
+                                        "Старинный хроникер вздыхает... почти готово.",
+                                        "Сверкнул знак судьбы. История складывается."
+                                    )
+                                }
+                                lines.random()
                             }
-                            Text(
+                            
+Text(
                                 text = loadingText,
                                 color = Color.White.copy(alpha = 0.9f),
                                 fontSize = 13.sp,

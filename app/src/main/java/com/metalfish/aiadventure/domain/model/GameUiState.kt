@@ -10,6 +10,10 @@ data class GameUiState(
     val choices: List<String>,
     val isGameOver: Boolean,
     val isWaitingForResponse: Boolean,
+    val sceneName: String = "",
+    val dayWeather: String = "",
+    val terrain: String = "",
+    val deadPrc: Int? = null,
 
     val hero: HeroUi,
     val heroProfile: HeroProfileUi,
@@ -25,6 +29,10 @@ data class GameUiState(
             choices = listOf("Пойти налево", "Пойти направо"),
             isGameOver = false,
             isWaitingForResponse = false,
+            sceneName = "",
+            dayWeather = "",
+            terrain = "",
+            deadPrc = null,
             hero = HeroUi(hp = 50, stamina = 30, gold = 10, reputation = 0),
 
             heroProfile = HeroProfileUi(

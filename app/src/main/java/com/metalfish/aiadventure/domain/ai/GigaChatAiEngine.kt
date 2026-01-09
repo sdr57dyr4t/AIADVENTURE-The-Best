@@ -13,7 +13,9 @@ import io.ktor.http.contentType
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -57,9 +59,15 @@ class GigaChatAiEngine @Inject constructor(
         require(authKeyOrToken.isNotBlank()) { "GIGACHAT_AUTH_KEY is empty. Put it into local.properties and rebuild." }
 
         val accessToken = getAccessToken(authKeyOrToken)
+        val gameType = when (context.setting.uppercase()) {
+            "POSTAPOC" -> "постапокалипсиса"
+            "CYBERPUNK" -> "киберпанк"
+            else -> "средневековое фэнтези"
+        }
 
         val raw = requestRaw(
             accessToken = accessToken,
+            gameType = gameType,
             userContent = userPrompt(currentSceneText, playerChoice, context)
         ) ?: return if (rateLimitExhausted) {
             rateLimitExhausted = false
@@ -71,7 +79,7 @@ class GigaChatAiEngine @Inject constructor(
         var scene = parseSceneJsonOrNull(raw)
         if (scene == null) {
             Log.w(TAG, "GigaChat returned non-JSON. Asking to regenerate.")
-            val retryRaw = requestRaw(accessToken, repairPrompt(raw))
+            val retryRaw = requestRaw(accessToken, gameType, repairPrompt(raw))
             scene = retryRaw?.let { parseSceneJsonOrNull(it) }
         }
 
@@ -84,9 +92,13 @@ class GigaChatAiEngine @Inject constructor(
             .ifEmpty { listOf("Продолжить путь", "Остановиться и осмотреться") }
 
         return AiTurnResult(
-            sceneText = scene.sceneDescr.trim().take(320),
+            sceneText = scene.sceneDescr.trim(),
             choices = choices,
             outcomeText = "",
+            sceneName = scene.sceneName.trim(),
+            dayWeather = scene.dayWeather.trim(),
+            terrain = scene.terrain.trim(),
+            deadPrc = parseDeadPrc(scene.deadPrc),
             statChanges = emptyList(),
             imagePrompt = scene.imgPrmt.ifBlank { buildFallbackImagePrompt(context, scene.sceneDescr) },
             mode = TurnMode.STORY,
@@ -96,9 +108,13 @@ class GigaChatAiEngine @Inject constructor(
 
     private fun fallbackTurn(text: String, ctx: AiContext): AiTurnResult {
         return AiTurnResult(
-            sceneText = text.take(320),
+            sceneText = text,
             choices = listOf("Продолжить путь", "Остановиться и осмотреться"),
             outcomeText = "",
+            sceneName = "",
+            dayWeather = "",
+            terrain = "",
+            deadPrc = null,
             statChanges = emptyList(),
             imagePrompt = buildFallbackImagePrompt(ctx, text),
             mode = TurnMode.STORY,
@@ -106,19 +122,19 @@ class GigaChatAiEngine @Inject constructor(
         )
     }
 
-    private fun systemPrompt(): String = """
-Играем в текстовую rpg игру в мрачном сеттинге. 
+    private fun systemPrompt(gameType: String): String = """
+Играем в текстовую rpg игру в мрачном сеттинге $gameType. 
 Придумай сюжет. Сюжет должен быть небанальным и развиваться постепенно. Старт сюжета - какое то необычное событие.
-Первая сцена игры - пролог. Где подробно опиши предысторию, мир вокруг, главного героя, его имя и цель.
+Первая сцена игры - пролог. В прологе подробно опиши предысторию, мир вокруг, главного героя, его имя и цель.
 Главный герой не может на первых ходах сразу побеждать всех противников или разгадывать сложные квесты - это должно происходить по мере развития сюжета. 
 После пролога начинается игра - ты описываешь сцену и варианты действий. Я выбираю один из двух вариантов. Игра должна проходиться не менее чем за 500 ходов. Одна сцена - один ход.
-Во время игры персонаж может погибнуть, если игрок сделает неверный выбор. 
-Должны присутствовать сцены боя. Бой должен длиться не больше пяти ходов, на первом ходе боя я должен выбрать оружие. Нельзя использовать оружие, которого у тебя нет. Бой должен быть реалистичным - персонаж не может голыми руками одолеть нескольких противников.
-Добавь смену дня и ночи. А также смену погоды.
-Персонаж должен есть, пить и спать. Недостаток сна или еды может привести к гибели персонажа.
-Ответ возвращай строго в формате JSON, без переносов строк внутри значений.Сде
-Эпоху указывай строкой.
-Ответ верни JSON с полями из кода: sceneDescr, imgPrmt, varLeft, varRight, musicType, dayWeather, terrain, turn
+Во время игры персонаж может погибнуть, если игрок сделает серию неверных выборов. Рассчитывай вероятность гибели в процентах (шкалу опасности) в начале каждого хода. При выводе вариантов герой должен их обдумывать с учётом шкалы опасности.
+В игре должны присутствовать сцены боя. Бой должен длиться не больше пяти ходов, на первом ходе боя я должен выбрать оружие. Нельзя использовать оружие, которого у тебя нет. Бой должен быть реалистичным - персонаж не может голыми руками одолеть нескольких противников.
+Добавь смену дня и ночи, примерно через 3-5 ходов. А также смену погоды, в том числе из-за изменения местности (горы или море, например).
+NPC в игре должны совершать обдуманные действия. Например, если герой ушел от погони, враги могут устроить засаду на этом месте, если герой вернётся. Или если герой победил одного соперника - в следующий раз его могут встречать уже трое соперников.
+Персонаж должен есть, пить и спать. Недостаток сна или еды может привести к гибели персонажа от голода, жажды или усталости.
+Жди ответ от пользователя в формате цифр - 1 или 2. Пролог подразумевает два ответа: 1-Играем, 2-Придумай другую историю.
+Свой ответ верни в json формате без ограничения длины. Возвращай только текст без картинок. Разделы у json следующие: название и номер сцены - scene_name, подробное описание сцены и вопрос без вариантов ответа - scene_descr, подробный промпт для генерации изображения сцены - img_prmt, первый вариант выбора - var_left, второй вариант выбора - var_right, мысли главного героя в пользу одного или другого варианта выбора - hero_mind, тип музыки (только два варианта: спокойный или напряжённый) - music_type, время суток и погода - day_weather, название местности - terrain, вероятность гибели (шкала опасности) - dead_prc.
 """.trimIndent()
 
     private fun userPrompt(cur: String, choice: String, ctx: AiContext): String =
@@ -192,20 +208,31 @@ class GigaChatAiEngine @Inject constructor(
 
     private fun normalizeSnakeKeys(jsonText: String): String {
         return jsonText
+            .replace("\"scene_name\"", "\"sceneName\"")
             .replace("\"scene_descr\"", "\"sceneDescr\"")
             .replace("\"img_prmt\"", "\"imgPrmt\"")
             .replace("\"var_left\"", "\"varLeft\"")
             .replace("\"var_right\"", "\"varRight\"")
+            .replace("\"hero_mind\"", "\"heroMind\"")
             .replace("\"music_type\"", "\"musicType\"")
             .replace("\"day_weather\"", "\"dayWeather\"")
             .replace("\"terrain\"", "\"terrain\"")
-            .replace("\"turn\"", "\"turn\"")
+            .replace("\"dead_prc\"", "\"deadPrc\"")
     }
 
-    private suspend fun requestRaw(accessToken: String, userContent: String): String? {
+    private fun parseDeadPrc(value: JsonElement?): Int? {
+        if (value == null) return null
+        val raw = value.toString().trim().trim('"')
+        val match = Regex("(-?\\d+(?:[.,]\\d+)?)").find(raw) ?: return null
+        val number = match.value.replace(',', '.').toDoubleOrNull() ?: return null
+        val pct = if (number in 0.0..1.0) (number * 100).roundToInt() else number.roundToInt()
+        return pct.coerceIn(0, 100)
+    }
+
+    private suspend fun requestRaw(accessToken: String, gameType: String, userContent: String): String? {
         if (!systemPromptSent) {
             conversation.clear()
-            conversation.add(Msg(role = "system", content = systemPrompt()))
+            conversation.add(Msg(role = "system", content = systemPrompt(gameType)))
         }
         conversation.add(Msg(role = "user", content = userContent))
         val msgs = conversation.toList()
@@ -236,7 +263,7 @@ class GigaChatAiEngine @Inject constructor(
                 return null
             }
             delay(1000)
-            return requestRaw(accessToken, userContent)
+            return requestRaw(accessToken, gameType, userContent)
         } else {
             rateLimitStreak = 0
         }
@@ -339,14 +366,16 @@ class GigaChatAiEngine @Inject constructor(
 
     @Serializable
     private data class SceneJson(
+        @SerialName("sceneName") val sceneName: String = "",
         @SerialName("sceneDescr") val sceneDescr: String,
         @SerialName("imgPrmt") val imgPrmt: String,
         @SerialName("varLeft") val varLeft: String,
         @SerialName("varRight") val varRight: String,
+        @SerialName("heroMind") val heroMind: String = "",
         @SerialName("musicType") val musicType: String,
         @SerialName("dayWeather") val dayWeather: String,
         @SerialName("terrain") val terrain: String,
-        val turn: Int
+        @SerialName("deadPrc") val deadPrc: JsonElement? = null
     )
 
     @Serializable
