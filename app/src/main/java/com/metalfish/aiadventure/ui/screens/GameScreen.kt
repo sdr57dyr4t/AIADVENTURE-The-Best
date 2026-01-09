@@ -15,6 +15,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,14 +30,15 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -43,7 +46,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,6 +58,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.random.Random
 
 @Composable
 fun GameScreen(
@@ -111,7 +116,6 @@ fun GameScreen(
                     )
             )
 
-            val hasCard = cardBitmap.value != null
             val canSwipe = !state.isImageLoading && !state.isGameOver
 
             var drag by remember { mutableStateOf(Offset.Zero) }
@@ -126,22 +130,38 @@ fun GameScreen(
 
             val cardW = maxWidth * 0.86f
             val cardH = (cardW * (4f / 3f)).coerceAtMost(maxHeight * 0.80f)
-            val textMeasurer = rememberTextMeasurer()
             val textPadding = 18.dp
-            val contentWidthPx = with(LocalDensity.current) {
-                (cardW - (textPadding * 2)).toPx().toInt().coerceAtLeast(1)
-            }
-            val borderBrush = when (state.world.setting.name) {
+            val settingName = state.world.setting.name
+            val cardShape = RoundedCornerShape(0.dp)
+            val borderBrush = when (settingName) {
                 "CYBERPUNK" -> Brush.linearGradient(
                     listOf(Color(0xFF5BFAFF), Color(0xFF8A5CFF), Color(0xFFFF4BD1))
                 )
                 "POSTAPOC" -> Brush.linearGradient(
-                    listOf(Color(0xFFD49A53), Color(0xFF7A4A2A), Color(0xFFB65A3A))
+                    listOf(Color(0xFF1B1B1B), Color(0xFFFFC107), Color(0xFF7A4A2A))
                 )
                 else -> Brush.linearGradient(
-                    listOf(Color(0xFF7CFFB4), Color(0xFF4B8BFF), Color(0xFF9F6BFF))
+                    listOf(Color(0xFF3E2A1A), Color(0xFF5A7A3C), Color(0xFF2E4B2E))
                 )
             }
+            val choiceBorderBrush = when (settingName) {
+                "CYBERPUNK" -> Brush.linearGradient(
+                    listOf(Color(0xFF5BFAFF), Color(0xFF8A5CFF))
+                )
+                "POSTAPOC" -> Brush.linearGradient(
+                    listOf(Color(0xFFFFC107), Color(0xFF1B1B1B))
+                )
+                else -> Brush.linearGradient(
+                    listOf(Color(0xFF5A7A3C), Color(0xFF3E2A1A))
+                )
+            }
+            val choiceBg = when (settingName) {
+                "CYBERPUNK" -> Color.Black.copy(alpha = 0.45f)
+                "POSTAPOC" -> Color(0xFF1A1A1A).copy(alpha = 0.55f)
+                else -> Color(0xFF2A2A1A).copy(alpha = 0.45f)
+            }
+            val hintBg = choiceBg
+            val hintBorderBrush = choiceBorderBrush
             val showLoading = state.isWaitingForResponse || state.isImageLoading
             val spin = rememberInfiniteTransition(label = "loading")
                 .animateFloat(
@@ -155,40 +175,6 @@ fun GameScreen(
                 ).value
 
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-
-                val fullText = state.sceneText.trim()
-                val font = when {
-                    fullText.length <= 180 -> 20.sp
-                    fullText.length <= 320 -> 18.sp
-                    fullText.length <= 520 -> 16.sp
-                    else -> 14.sp
-                }
-                val textStyle = TextStyle(
-                    fontSize = font,
-                    lineHeight = (font.value + 4).sp
-                )
-                var pageIndex by remember(fullText) { mutableStateOf(0) }
-                val pages = remember(fullText, contentWidthPx, font) {
-                    paginateText(
-                        text = fullText,
-                        textMeasurer = textMeasurer,
-                        style = textStyle,
-                        maxWidthPx = contentWidthPx,
-                        maxLines = 12
-                    )
-                }
-                val hasMorePages = pages.size > 1 && pageIndex < pages.lastIndex
-                val pageText = pages.getOrNull(pageIndex).orEmpty()
-
-                // Hint (shows while swiping)
-                val hintText = when {
-                    hasMorePages -> "Читать далее"
-                    drag.x <= -10f -> leftChoice
-                    drag.x >= 10f -> rightChoice
-                    else -> ""
-                }
-                val hintAlpha = ((abs(drag.x) / threshold).coerceIn(0f, 1f) * 0.95f)
-
                 AnimatedVisibility(
                     visible = hintText.isNotBlank() && canSwipe,
                     enter = fadeIn(),
@@ -199,8 +185,9 @@ fun GameScreen(
                 ) {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(Color.Black.copy(alpha = 0.35f))
+                            .width(cardW)
+                            .background(hintBg, cardShape)
+                            .border(2.dp, hintBorderBrush, cardShape)
                             .padding(horizontal = 16.dp, vertical = 10.dp)
                             .alpha(hintAlpha)
                     ) {
@@ -208,7 +195,9 @@ fun GameScreen(
                             text = hintText,
                             color = Color.White,
                             fontSize = 16.sp,
-                            maxLines = 1,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
@@ -218,7 +207,7 @@ fun GameScreen(
                 Box(
                     modifier = Modifier
                         .size(cardW, cardH)
-                        .clip(RoundedCornerShape(22.dp))
+                        .clip(cardShape)
                         .rotate(rotation)
                         .offset { IntOffset(drag.x.roundToInt(), drag.y.roundToInt()) }
                         .pointerInput(canSwipe, leftChoice, rightChoice) {
@@ -234,17 +223,6 @@ fun GameScreen(
                                 },
                                 onDragEnd = {
                                     val dx = drag.x
-                                    if (hasMorePages) {
-                                        if (abs(dx) >= threshold * 0.35f) {
-                                            scope.launch {
-                                                pageIndex = (pageIndex + 1).coerceAtMost(pages.lastIndex)
-                                                drag = Offset.Zero
-                                            }
-                                        } else {
-                                            scope.launch { drag = Offset.Zero }
-                                        }
-                                        return@detectDragGestures
-                                    }
                                     if (dx <= -threshold) {
                                         val picked = "LEFT: $leftChoice"
                                         scope.launch {
@@ -274,7 +252,12 @@ fun GameScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .border(2.dp, borderBrush, RoundedCornerShape(22.dp))
+                                .border(
+                                    6.dp,
+                                    if (settingName == "CYBERPUNK") Color(0xFF4BFBFF).copy(alpha = 0.25f) else Color.Transparent,
+                                    cardShape
+                                )
+                                .border(2.dp, borderBrush, cardShape)
                         ) {
                             Image(
                                 bitmap = bmp,
@@ -288,7 +271,104 @@ fun GameScreen(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .background(Color.Black.copy(alpha = 0.25f))
+                                .border(
+                                    6.dp,
+                                    if (settingName == "CYBERPUNK") Color(0xFF4BFBFF).copy(alpha = 0.25f) else Color.Transparent,
+                                    cardShape
+                                )
+                                .border(2.dp, borderBrush, cardShape)
                         )
+                    }
+
+                    if (settingName == "POSTAPOC") {
+                        val rustSpots = remember {
+                            List(160) { Offset(Random.nextFloat(), Random.nextFloat()) }
+                        }
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val stroke = 8.dp.toPx()
+                            val border = 12.dp.toPx()
+                            val w = size.width
+                            val h = size.height
+                            val yellow = Color(0xFFFFC107).copy(alpha = 0.65f)
+                            val black = Color(0xFF1A1A1A).copy(alpha = 0.75f)
+
+                            val borderPath = Path().apply {
+                                fillType = PathFillType.EvenOdd
+                                addRect(Rect(0f, 0f, w, h))
+                                addRect(Rect(border, border, w - border, h - border))
+                            }
+
+                            clipPath(borderPath) {
+                                val stripeStep = stroke * 1.4f
+                                var x = -h
+                                while (x < w + h) {
+                                    drawLine(
+                                        if (((x / stripeStep).toInt() % 2) == 0) yellow else black,
+                                        Offset(x, 0f),
+                                        Offset(x + h, h),
+                                        strokeWidth = stroke
+                                    )
+                                    x += stripeStep
+                                }
+
+                                val rust = Color(0xFF8B4A2A).copy(alpha = 0.35f)
+                                rustSpots.forEach { p ->
+                                    val rx = p.x * w
+                                    val ry = p.y * h
+                                    drawCircle(rust, radius = 3.dp.toPx(), center = Offset(rx, ry))
+                                }
+                            }
+                        }
+                    } else if (settingName != "CYBERPUNK") {
+                        data class Knot(val edge: Int, val t: Float, val inset: Float, val radius: Float)
+                        val knots = remember {
+                            List(28) {
+                                Knot(
+                                    edge = Random.nextInt(4),
+                                    t = Random.nextFloat(),
+                                    inset = Random.nextFloat(),
+                                    radius = 2f + Random.nextFloat() * 5f
+                                )
+                            }
+                        }
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val plank = 12.dp.toPx()
+                            val wood = Color(0xFF6A4528)
+                            val woodDark = Color(0xFF3E2816)
+                            val grain = Color(0xFF8A5A36).copy(alpha = 0.35f)
+                            val w = size.width
+                            val h = size.height
+
+                            drawRect(wood, topLeft = Offset(0f, 0f), size = androidx.compose.ui.geometry.Size(w, plank))
+                            drawRect(wood, topLeft = Offset(0f, h - plank), size = androidx.compose.ui.geometry.Size(w, plank))
+                            drawRect(wood, topLeft = Offset(0f, plank), size = androidx.compose.ui.geometry.Size(plank, h - 2 * plank))
+                            drawRect(wood, topLeft = Offset(w - plank, plank), size = androidx.compose.ui.geometry.Size(plank, h - 2 * plank))
+
+                            repeat(6) { i ->
+                                val y = plank * 0.35f + i * 3.dp.toPx()
+                                drawLine(grain, Offset(0f, y), Offset(w, y), strokeWidth = 1.5.dp.toPx())
+                                val yb = h - plank * 0.35f - i * 3.dp.toPx()
+                                drawLine(grain, Offset(0f, yb), Offset(w, yb), strokeWidth = 1.5.dp.toPx())
+                            }
+                            repeat(6) { i ->
+                                val x = plank * 0.35f + i * 3.dp.toPx()
+                                drawLine(grain, Offset(x, 0f), Offset(x, h), strokeWidth = 1.5.dp.toPx())
+                                val xr = w - plank * 0.35f - i * 3.dp.toPx()
+                                drawLine(grain, Offset(xr, 0f), Offset(xr, h), strokeWidth = 1.5.dp.toPx())
+                            }
+
+                            drawRect(woodDark, size = size, style = Stroke(width = 2.dp.toPx()))
+
+                            knots.forEach { k ->
+                                val pos = when (k.edge) {
+                                    0 -> Offset(k.t * w, plank * (0.35f + 0.45f * k.inset))
+                                    1 -> Offset(w - plank * (0.35f + 0.45f * k.inset), k.t * h)
+                                    2 -> Offset(k.t * w, h - plank * (0.35f + 0.45f * k.inset))
+                                    else -> Offset(plank * (0.35f + 0.45f * k.inset), k.t * h)
+                                }
+                                drawCircle(woodDark, radius = k.radius.dp.toPx(), center = pos)
+                            }
+                        }
                     }
 
                     if (showText) {
@@ -306,36 +386,31 @@ fun GameScreen(
                                 )
                         )
 
-                        Text(
-                            text = pageText,
-                            color = Color.White,
-                            fontSize = font,
-                            lineHeight = (font.value + 4).sp,
-                            textAlign = TextAlign.Center,
-                            maxLines = 12,
-                            overflow = TextOverflow.Clip,
-                            modifier = Modifier.padding(horizontal = textPadding)
-                        )
-                    }
+                        val textScroll = rememberScrollState()
+                        val t = state.sceneText.trim()
+                        val font = 18.sp
+                        val fontFamily = when (settingName) {
+                            "CYBERPUNK" -> FontFamily(Font(R.font.cyberpunk_modern))
+                            "POSTAPOC" -> FontFamily(Font(R.font.postapoc_terminal))
+                            else -> FontFamily(Font(R.font.fantasy_book))
+                        }
 
-                    AnimatedVisibility(
-                        visible = hasMorePages && !showLoading,
-                        enter = fadeIn(),
-                        exit = fadeOut(),
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 14.dp)
-                    ) {
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(Color.Black.copy(alpha = 0.35f))
-                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                                .fillMaxSize()
+                                .padding(horizontal = textPadding)
+                                .verticalScroll(textScroll),
+                            contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "Читать далее",
+                                text = t,
                                 color = Color.White,
-                                fontSize = 13.sp
+                                fontSize = font,
+                                fontFamily = fontFamily,
+                                lineHeight = (font.value + 4).sp,
+                                textAlign = TextAlign.Center,
+                                overflow = TextOverflow.Clip,
+                                modifier = Modifier.fillMaxWidth()
                             )
                         }
                     }
@@ -389,59 +464,5 @@ fun GameScreen(
             }
         }
     }
-}
-
-private fun paginateText(
-    text: String,
-    textMeasurer: androidx.compose.ui.text.TextMeasurer,
-    style: TextStyle,
-    maxWidthPx: Int,
-    maxLines: Int
-): List<String> {
-    val clean = text.trim()
-    if (clean.isBlank()) return listOf("")
-    val pages = mutableListOf<String>()
-    val constraints = Constraints(maxWidth = maxWidthPx)
-    var start = 0
-
-    while (start < clean.length) {
-        while (start < clean.length && clean[start].isWhitespace()) start++
-        if (start >= clean.length) break
-
-        var low = start + 1
-        var high = clean.length
-        var best = start + 1
-
-        while (low <= high) {
-            val mid = (low + high) / 2
-            val candidateEnd = findBreak(clean, start, mid)
-            val slice = clean.substring(start, candidateEnd)
-            val result = textMeasurer.measure(
-                text = AnnotatedString(slice),
-                style = style,
-                constraints = constraints
-            )
-            if (result.lineCount <= maxLines) {
-                best = candidateEnd
-                low = mid + 1
-            } else {
-                high = mid - 1
-            }
-        }
-
-        if (best <= start) {
-            best = (start + 1).coerceAtMost(clean.length)
-        }
-        pages.add(clean.substring(start, best).trim())
-        start = best
-    }
-
-    return pages.ifEmpty { listOf(clean) }
-}
-
-private fun findBreak(text: String, start: Int, end: Int): Int {
-    if (end >= text.length) return text.length
-    val cut = text.lastIndexOfAny(charArrayOf(' ', '\n', '\t'), startIndex = end - 1)
-    return if (cut > start) cut + 1 else end
 }
 

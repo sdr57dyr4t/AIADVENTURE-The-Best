@@ -13,6 +13,7 @@ import io.ktor.http.contentType
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.delay
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -38,6 +39,8 @@ class GigaChatAiEngine @Inject constructor(
     @Volatile private var cachedTokenExpiresAtMs: Long = 0L
     @Volatile private var systemPromptSent: Boolean = false
     private val conversation: MutableList<Msg> = mutableListOf()
+    @Volatile private var rateLimitStreak: Int = 0
+    @Volatile private var rateLimitExhausted: Boolean = false
 
     override suspend fun nextTurn(
         currentSceneText: String,
@@ -58,7 +61,12 @@ class GigaChatAiEngine @Inject constructor(
         val raw = requestRaw(
             accessToken = accessToken,
             userContent = userPrompt(currentSceneText, playerChoice, context)
-        ) ?: return fallbackTurn("Сеть отвечает странной тишиной. Реальность дрожит и не открывается.", context)
+        ) ?: return if (rateLimitExhausted) {
+            rateLimitExhausted = false
+            fallbackTurn("Обеденный перерыв! Сервера перегружены.", context)
+        } else {
+            fallbackTurn("Сеть отвечает странной тишиной. Реальность дрожит и не открывается.", context)
+        }
 
         var scene = parseSceneJsonOrNull(raw)
         if (scene == null) {
@@ -99,7 +107,7 @@ class GigaChatAiEngine @Inject constructor(
     }
 
     private fun systemPrompt(): String = """
-Играем в текстовую rpg игру в мрачном фэнтезийном сеттинге, соответствующем средневековью. 
+Играем в текстовую rpg игру в мрачном сеттинге. 
 Придумай сюжет. Сюжет должен быть небанальным и развиваться постепенно. Старт сюжета - какое то необычное событие.
 Первая сцена игры - пролог. Где подробно опиши предысторию, мир вокруг, главного героя, его имя и цель.
 Главный герой не может на первых ходах сразу побеждать всех противников или разгадывать сложные квесты - это должно происходить по мере развития сюжета. 
@@ -108,7 +116,8 @@ class GigaChatAiEngine @Inject constructor(
 Должны присутствовать сцены боя. Бой должен длиться не больше пяти ходов, на первом ходе боя я должен выбрать оружие. Нельзя использовать оружие, которого у тебя нет. Бой должен быть реалистичным - персонаж не может голыми руками одолеть нескольких противников.
 Добавь смену дня и ночи. А также смену погоды.
 Персонаж должен есть, пить и спать. Недостаток сна или еды может привести к гибели персонажа.
-Ответ возвращай строго в формате JSON, без переносов строк внутри значений.
+Ответ возвращай строго в формате JSON, без переносов строк внутри значений.Сде
+Эпоху указывай строкой.
 Ответ верни JSON с полями из кода: sceneDescr, imgPrmt, varLeft, varRight, musicType, dayWeather, terrain, turn
 """.trimIndent()
 
@@ -206,13 +215,31 @@ class GigaChatAiEngine @Inject constructor(
             messages = msgs,
             temperature = 0.85
         )
+        val reqJson = json.encodeToString(ChatRequest.serializer(), req)
+        Log.d(TAG, "GigaChat request json=${reqJson.take(4000)}")
 
-        val responseText = http.post(chatUrl) {
+        val response = http.post(chatUrl) {
             header("Authorization", "Bearer $accessToken")
             header("Accept", "application/json")
             contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(ChatRequest.serializer(), req))
-        }.bodyAsText()
+            setBody(reqJson)
+        }
+        val responseText = response.bodyAsText()
+        Log.d(TAG, "GigaChat response raw=${responseText.take(4000)}")
+        val isRateLimited = response.status.value == 429 || responseText.contains("\"code\": 429")
+        if (isRateLimited) {
+            rateLimitStreak += 1
+            Log.w(TAG, "GigaChat rate limited: streak=$rateLimitStreak")
+            if (rateLimitStreak >= 10) {
+                rateLimitExhausted = true
+                rateLimitStreak = 0
+                return null
+            }
+            delay(1000)
+            return requestRaw(accessToken, userContent)
+        } else {
+            rateLimitStreak = 0
+        }
 
         val resp = runCatching { json.decodeFromString(ChatResponse.serializer(), responseText) }
             .getOrElse {

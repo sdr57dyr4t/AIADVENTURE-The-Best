@@ -63,13 +63,8 @@ fun StartScreen(
         MusicPlayer.playRawName(context, rawName)
     }
 
-    val dragThresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
-    val imageShape = RoundedCornerShape(
-        topStart = 46.dp,
-        topEnd = 46.dp,
-        bottomStart = 14.dp,
-        bottomEnd = 14.dp
-    )
+    val dragThresholdPx = with(LocalDensity.current) { 240.dp.toPx() }
+    val imageShape = RoundedCornerShape(0.dp)
     val borderColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f)
     val worlds = listOf(
         WorldCard(
@@ -235,8 +230,8 @@ private fun WorldImageCard(
                         onDragStart = {
                             dragDistance.value = 0f
                             started.value = false
-                            dragVelocity.value = 0f
                             onPlayMusic()
+                            dragVelocity.value = 0f
                         },
                     onDragCancel = {
                         dragDistance.value = 0f
@@ -269,14 +264,14 @@ private fun WorldImageCard(
                         if (dragDistance.value >= dragThresholdPx) {
                             started.value = true
                             onStart(
-                                    WorldDraft(
-                                        setting = world.setting,
-                                        era = world.era,
-                                        location = world.location,
-                                        tone = world.tone
-                                    )
+                                WorldDraft(
+                                    setting = world.setting,
+                                    era = world.era,
+                                    location = world.location,
+                                    tone = world.tone
                                 )
-                            }
+                            )
+                        }
                         }
                     )
                 }
