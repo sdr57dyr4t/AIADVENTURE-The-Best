@@ -2,8 +2,9 @@ package com.metalfish.aiadventure.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.EaseOutCubic
 import androidx.compose.animation.core.EaseOutQuad
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
@@ -11,23 +12,23 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -38,7 +39,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -51,7 +56,7 @@ import com.metalfish.aiadventure.R
 import com.metalfish.aiadventure.ui.model.WorldDraft
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.absoluteValue
+import androidx.compose.foundation.gestures.detectDragGestures
 
 @Composable
 fun StartScreen(
@@ -63,7 +68,6 @@ fun StartScreen(
         MusicPlayer.playRawName(context, rawName)
     }
 
-    val dragThresholdPx = with(LocalDensity.current) { 240.dp.toPx() }
     val imageShape = RoundedCornerShape(0.dp)
     val borderColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f)
     val worlds = listOf(
@@ -92,13 +96,20 @@ fun StartScreen(
             musicRawName = "music_postapoc"
         )
     )
+    val activeDragIndex = remember { mutableStateOf<Int?>(null) }
+    val isDragging = remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .padding(20.dp)
     ) {
+        Image(
+            painter = painterResource(id = R.drawable.start_bg),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
         Canvas(modifier = Modifier.fillMaxSize()) {
             val spacing = 26.dp.toPx()
             val radius = 1.2.dp.toPx()
@@ -114,7 +125,9 @@ fun StartScreen(
             }
         }
         Column(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp),
             verticalArrangement = Arrangement.Top
         ) {
             Column(
@@ -162,10 +175,18 @@ fun StartScreen(
                         world = world,
                         shape = imageShape,
                         borderColor = borderColor,
-                        dragThresholdPx = dragThresholdPx,
                         onStart = onStartWorld,
                         onPlayMusic = { playMusic(world.musicRawName) },
-                        staggerMs = 80 * index
+                        staggerMs = 80 * index,
+                        isDimmed = isDragging.value && activeDragIndex.value != index,
+                        onDragStart = {
+                            activeDragIndex.value = index
+                            isDragging.value = true
+                        },
+                        onDragEnd = {
+                            isDragging.value = false
+                            activeDragIndex.value = null
+                        }
                     )
                 }
             }
@@ -187,26 +208,28 @@ private fun WorldImageCard(
     world: WorldCard,
     shape: RoundedCornerShape,
     borderColor: androidx.compose.ui.graphics.Color,
-    dragThresholdPx: Float,
     onStart: (WorldDraft) -> Unit,
     onPlayMusic: () -> Unit,
-    staggerMs: Int
+    staggerMs: Int,
+    isDimmed: Boolean,
+    onDragStart: () -> Unit,
+    onDragEnd: () -> Unit
 ) {
-    val dragDistance = remember { mutableStateOf(0f) }
-    val started = remember { mutableStateOf(false) }
-    val xOffset = remember { Animatable(0f) }
     val reveal = remember { mutableStateOf(false) }
+    val drag = remember { mutableStateOf(Offset.Zero) }
+    val animX = remember { Animatable(0f) }
+    val animY = remember { Animatable(0f) }
+    val isAnimating = remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val dragVelocity = remember { mutableStateOf(0f) }
+    val saturation by animateFloatAsState(
+        targetValue = if (isDimmed) 0f else 1f,
+        animationSpec = tween(1500, easing = LinearEasing),
+        label = "worldCardSaturation"
+    )
 
     LaunchedEffect(Unit) {
         delay(90L + staggerMs)
         reveal.value = true
-        xOffset.snapTo(-24f)
-        xOffset.animateTo(
-            targetValue = 0f,
-            animationSpec = tween(durationMillis = 420, easing = EaseOutCubic)
-        )
     }
 
     AnimatedVisibility(
@@ -216,77 +239,109 @@ private fun WorldImageCard(
             animationSpec = tween(360, easing = EaseOutQuad)
         )
     ) {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth(0.94f)
                 .aspectRatio(16f / 9f)
-                .shadow(12.dp, shape)
-                .clip(shape)
-                .border(1.dp, borderColor, shape)
-                .pointerInput(world.imageRes) {
-                    detectTapGestures(onTap = { onPlayMusic() })
-                }
-                .pointerInput(world.imageRes) {
-                    detectHorizontalDragGestures(
-                        onDragStart = {
-                            dragDistance.value = 0f
-                            started.value = false
-                            onPlayMusic()
-                            dragVelocity.value = 0f
-                        },
-                    onDragCancel = {
-                        dragDistance.value = 0f
-                        scope.launch {
-                            xOffset.animateTo(0f, tween(220, easing = EaseOutQuad))
-                        }
-                    },
-                    onDragEnd = {
-                        dragDistance.value = 0f
-                        if (!started.value) {
-                            scope.launch {
-                                xOffset.stop()
-                                val inertia = (dragVelocity.value * 160f)
-                                    .coerceIn(-120f, 120f)
-                                val target = (xOffset.value + inertia).coerceIn(-120f, 120f)
-                                xOffset.animateTo(target, tween(220, easing = EaseOutCubic))
-                                xOffset.animateTo(0f, tween(260, easing = EaseOutQuad))
-                            }
-                        }
-                    },
-                    onHorizontalDrag = { change, dragAmount ->
-                        if (started.value) return@detectHorizontalDragGestures
-                        dragVelocity.value = dragVelocity.value * 0.85f + dragAmount
-                        change.consume()
-                        dragDistance.value += dragAmount.absoluteValue
-                        val target = (xOffset.value + dragAmount).coerceIn(-90f, 90f)
-                        scope.launch {
-                            xOffset.snapTo(target)
-                        }
-                        if (dragDistance.value >= dragThresholdPx) {
-                            started.value = true
-                            onStart(
-                                WorldDraft(
-                                    setting = world.setting,
-                                    era = world.era,
-                                    location = world.location,
-                                    tone = world.tone
-                                )
-                            )
-                        }
-                        }
-                    )
-                }
         ) {
-            Image(
-                painter = painterResource(id = world.imageRes),
-                contentDescription = world.setting,
-                contentScale = ContentScale.Crop,
-                alignment = Alignment.Center,
+            val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
+            val heightPx = with(LocalDensity.current) { maxHeight.toPx() }
+            val threshold = widthPx * 0.22f
+            val displayOffset = if (isAnimating.value) {
+                Offset(animX.value, animY.value)
+            } else {
+                drag.value
+            }
+            val rotation = ((displayOffset.x / widthPx) * 9f).coerceIn(-10f, 10f)
+
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .align(Alignment.Center)
-                    .offset(x = with(LocalDensity.current) { xOffset.value.toDp() })
-            )
+                    .graphicsLayer {
+                        translationX = displayOffset.x
+                        translationY = displayOffset.y
+                        rotationZ = rotation
+                    }
+                    .shadow(12.dp, shape)
+                    .clip(shape)
+                    .border(1.dp, borderColor, shape)
+                    .pointerInput(world.imageRes) {
+                        detectTapGestures(onTap = { onPlayMusic() })
+                    }
+                    .pointerInput(world.imageRes) {
+                        detectDragGestures(
+                            onDragStart = {
+                                if (isAnimating.value) return@detectDragGestures
+                                onPlayMusic()
+                                onDragStart()
+                            },
+                            onDrag = { change, amount ->
+                                if (isAnimating.value) return@detectDragGestures
+                                change.consumePositionChange()
+                                drag.value = Offset(
+                                    x = (drag.value.x + amount.x).coerceIn(-widthPx, widthPx),
+                                    y = (drag.value.y + amount.y * 0.35f).coerceIn(-heightPx * 0.18f, heightPx * 0.18f)
+                                )
+                            },
+                            onDragEnd = {
+                                if (isAnimating.value) return@detectDragGestures
+                                onDragEnd()
+                                val dx = drag.value.x
+                                scope.launch {
+                                    isAnimating.value = true
+                                    animX.snapTo(drag.value.x)
+                                    animY.snapTo(drag.value.y)
+                                    if (dx <= -threshold || dx >= threshold) {
+                                        val targetX = if (dx < 0f) -widthPx * 1.2f else widthPx * 1.2f
+                                        animX.animateTo(targetX, tween(220, easing = EaseOutQuad))
+                                        animY.animateTo(drag.value.y * 0.2f, tween(220, easing = EaseOutQuad))
+                                        onStart(
+                                            WorldDraft(
+                                                setting = world.setting,
+                                                era = world.era,
+                                                location = world.location,
+                                                tone = world.tone
+                                            )
+                                        )
+                                    } else {
+                                        animX.animateTo(0f, tween(200, easing = EaseOutQuad))
+                                        animY.animateTo(0f, tween(200, easing = EaseOutQuad))
+                                    }
+                                    drag.value = Offset.Zero
+                                    animX.snapTo(0f)
+                                    animY.snapTo(0f)
+                                    isAnimating.value = false
+                                }
+                            },
+                            onDragCancel = {
+                                if (isAnimating.value) return@detectDragGestures
+                                onDragEnd()
+                                scope.launch {
+                                    isAnimating.value = true
+                                    animX.snapTo(drag.value.x)
+                                    animY.snapTo(drag.value.y)
+                                    animX.animateTo(0f, tween(200, easing = EaseOutQuad))
+                                    animY.animateTo(0f, tween(200, easing = EaseOutQuad))
+                                    drag.value = Offset.Zero
+                                    animX.snapTo(0f)
+                                    animY.snapTo(0f)
+                                    isAnimating.value = false
+                                }
+                            }
+                        )
+                    }
+            ) {
+                Image(
+                    painter = painterResource(id = world.imageRes),
+                    contentDescription = world.setting,
+                    contentScale = ContentScale.Crop,
+                    colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(saturation) }),
+                    alignment = Alignment.Center,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .align(Alignment.Center)
+                )
+            }
         }
     }
 }

@@ -129,6 +129,8 @@ fun GameScreen(
                 else -> ""
             }
             val hintAlpha = ((abs(drag.x) / threshold).coerceIn(0f, 1f) * 0.95f)
+            val hintLineHeight = 20.sp
+            val hintMinHeight = with(LocalDensity.current) { (hintLineHeight * 2).toDp() } + 20.dp
 
             val cardW = maxWidth * 0.86f
             val cardH = (cardW * (4f / 3f)).coerceAtMost(maxHeight * 0.80f)
@@ -155,7 +157,7 @@ fun GameScreen(
                     listOf(Color(0xFFFFC107), Color(0xFF1B1B1B))
                 )
                 else -> Brush.linearGradient(
-                    listOf(Color(0xFF5A7A3C), Color(0xFF3E2A1A))
+                    listOf(Color(0xFF3A3A3A), Color(0xFF3A3A3A))
                 )
             }
             val choiceBg = when (settingName) {
@@ -182,6 +184,11 @@ fun GameScreen(
                     ),
                     label = "loadingSpin"
                 ).value
+            val loadingTextColor = when (settingName) {
+                "CYBERPUNK" -> Color(0xFF5BFAFF)
+                "POSTAPOC" -> Color(0xFFFFC107)
+                else -> Color(0xFF5A7A3C)
+            }
 
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 AnimatedVisibility(
@@ -195,15 +202,18 @@ fun GameScreen(
                     Box(
                         modifier = Modifier
                             .width(cardW)
+                            .heightIn(min = hintMinHeight)
                             .background(hintBg, cardShape)
                             .border(2.dp, hintBorderBrush, cardShape)
                             .padding(horizontal = 16.dp, vertical = 10.dp)
-                            .alpha(hintAlpha)
+                            .alpha(hintAlpha),
+                        contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = hintText,
                             color = Color.White,
                             fontSize = 16.sp,
+                            lineHeight = hintLineHeight,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth(),
                             maxLines = 2,
@@ -393,58 +403,12 @@ fun GameScreen(
                                     }
                                 }
                             }
-                        } else if (settingName != "CYBERPUNK") {
-                            data class Speck(val edge: Int, val t: Float, val inset: Float, val radius: Float, val alpha: Float)
-                            val specks = remember {
-                                List(120) {
-                                    Speck(
-                                        edge = Random.nextInt(4),
-                                        t = Random.nextFloat(),
-                                        inset = Random.nextFloat(),
-                                        radius = 1.5f + Random.nextFloat() * 3.5f,
-                                        alpha = 0.18f + Random.nextFloat() * 0.25f
-                                    )
-                                }
-                            }
-                            Canvas(modifier = Modifier.fillMaxSize()) {
-                                val w = size.width
-                                val h = size.height
-                                val outer = 12.dp.toPx()
-                                val mid = 8.dp.toPx()
-                                val inner = 4.dp.toPx()
-
-                                val dark = Color(0xFF3C2514)
-                                val base = Color(0xFF7A4C26)
-                                val gold = Color(0xFFC9A25A)
-                                val highlight = Color(0xFFE4C983)
-                                val shadow = Color(0xFF2A1A0E)
-
-                                drawRect(dark, size = size, style = Stroke(width = outer))
-                                drawRect(base, size = size, style = Stroke(width = mid))
-                                drawRect(gold, size = size, style = Stroke(width = inner))
-
-                                val inset = outer * 0.85f
-                                drawRect(shadow, topLeft = Offset(inset, inset), size = size.copy(width = w - inset * 2, height = h - inset * 2), style = Stroke(width = 2.dp.toPx()))
-                                drawRect(highlight, topLeft = Offset(inset + 2.dp.toPx(), inset + 2.dp.toPx()), size = size.copy(width = w - (inset + 2.dp.toPx()) * 2, height = h - (inset + 2.dp.toPx()) * 2), style = Stroke(width = 1.5.dp.toPx()))
-
-                                val corner = outer * 1.2f
-                                val cornerStroke = Stroke(width = 2.dp.toPx())
-                                drawCircle(highlight, radius = corner, center = Offset(outer * 0.9f, outer * 0.9f), style = cornerStroke)
-                                drawCircle(highlight, radius = corner, center = Offset(w - outer * 0.9f, outer * 0.9f), style = cornerStroke)
-                                drawCircle(highlight, radius = corner, center = Offset(outer * 0.9f, h - outer * 0.9f), style = cornerStroke)
-                                drawCircle(highlight, radius = corner, center = Offset(w - outer * 0.9f, h - outer * 0.9f), style = cornerStroke)
-
-                                specks.forEach { s ->
-                                    val pos = when (s.edge) {
-                                        0 -> Offset(s.t * w, outer * (0.4f + 0.5f * s.inset))
-                                        1 -> Offset(w - outer * (0.4f + 0.5f * s.inset), s.t * h)
-                                        2 -> Offset(s.t * w, h - outer * (0.4f + 0.5f * s.inset))
-                                        else -> Offset(outer * (0.4f + 0.5f * s.inset), s.t * h)
-                                    }
-                                    drawCircle(gold.copy(alpha = s.alpha), radius = s.radius.dp.toPx(), center = pos)
-                                }
-                            }
+                    } else if (settingName != "CYBERPUNK") {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val frame = 6.dp.toPx()
+                            drawRect(Color(0xFF3A3A3A), size = size, style = Stroke(width = frame))
                         }
+                    }
 
                     if (showText) {
                         Box(
@@ -546,16 +510,16 @@ fun GameScreen(
                                     Text(
                                         text = state.dayWeather.trim().ifBlank { "-" },
                                         color = Color.White,
-                                        fontSize = 12.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                        fontSize = 13.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Clip
                                     )
                                     Text(
                                         text = state.terrain.trim().ifBlank { "-" },
                                         color = Color.White.copy(alpha = 0.85f),
-                                        fontSize = 12.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                        fontSize = 13.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Clip
                                     )
                                 }
 
@@ -586,6 +550,7 @@ fun GameScreen(
                                 .background(Color.Black.copy(alpha = 0.35f)),
                             contentAlignment = Alignment.Center
                         ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Canvas(
                                 modifier = Modifier
                                     .size(72.dp)
@@ -600,6 +565,7 @@ fun GameScreen(
                                     style = stroke
                                 )
                             }
+                                Spacer(Modifier.height(16.dp))
                             val loadingText = remember(settingName) {
                                 val lines = when (settingName) {
                                     "CYBERPUNK" -> listOf(
@@ -629,12 +595,13 @@ fun GameScreen(
                             
                             Text(
                                 text = loadingText,
-                                color = Color.White.copy(alpha = 0.9f),
-                                fontSize = 13.sp,
+                                color = loadingTextColor,
+                                fontSize = 14.sp,
+                                textAlign = TextAlign.Center,
                                 modifier = Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .padding(bottom = 16.dp)
+                                    .padding(horizontal = 24.dp)
                             )
+                            }
                         }
                     }
                 }
@@ -644,4 +611,3 @@ fun GameScreen(
     }
 }
 }
-
