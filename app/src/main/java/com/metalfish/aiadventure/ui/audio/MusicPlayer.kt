@@ -14,7 +14,10 @@ object MusicPlayer {
         if (currentResId == resId && player?.isPlaying == true) return
 
         player?.release()
-        player = MediaPlayer.create(context, resId)?.apply { start() }
+        player = MediaPlayer.create(context, resId)?.apply {
+            isLooping = true
+            start()
+        }
         currentResId = resId
     }
 

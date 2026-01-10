@@ -154,7 +154,8 @@ fun StartScreen(
 
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(22.dp)
+                verticalArrangement = Arrangement.spacedBy(22.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 worlds.forEachIndexed { index, world ->
                     WorldImageCard(
@@ -217,7 +218,7 @@ private fun WorldImageCard(
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.94f)
                 .aspectRatio(16f / 9f)
                 .shadow(12.dp, shape)
                 .clip(shape)

@@ -18,7 +18,6 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -28,8 +27,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
@@ -43,22 +42,22 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.metalfish.aiadventure.R
 import com.metalfish.aiadventure.domain.model.GameUiState
+import com.metalfish.aiadventure.ui.audio.SfxPlayer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
-import kotlin.math.roundToInt
 import kotlin.random.Random
 
 @Composable
@@ -69,6 +68,7 @@ fun GameScreen(
     onSettings: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current.applicationContext
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
 
@@ -120,6 +120,7 @@ fun GameScreen(
             val canSwipe = !state.isImageLoading && !state.isGameOver
 
             var drag by remember { mutableStateOf(Offset.Zero) }
+            var previewDir by remember { mutableStateOf(0) }
             val rotation = ((drag.x / widthPx) * 9f).coerceIn(-10f, 10f)
 
             val hintText = when {
@@ -131,6 +132,7 @@ fun GameScreen(
 
             val cardW = maxWidth * 0.86f
             val cardH = (cardW * (4f / 3f)).coerceAtMost(maxHeight * 0.80f)
+            val previewThreshold = threshold * 0.45f
             val textPadding = 18.dp
             val settingName = state.world.setting.name
             val cardShape = RoundedCornerShape(0.dp)
@@ -213,202 +215,236 @@ fun GameScreen(
                 // CARD
                 Box(
                     modifier = Modifier
-                        .size(cardW, cardH)
-                        .clip(cardShape)
-                        .rotate(rotation)
-                        .offset { IntOffset(drag.x.roundToInt(), drag.y.roundToInt()) }
-                        .pointerInput(canSwipe, leftChoice, rightChoice) {
-                            if (!canSwipe) return@pointerInput
-
-                            detectDragGestures(
-                                onDrag = { change, amount ->
-                                    change.consumePositionChange()
-                                    drag = Offset(
-                                        x = (drag.x + amount.x).coerceIn(-widthPx, widthPx),
-                                        y = (drag.y + amount.y * 0.35f).coerceIn(-heightPx * 0.18f, heightPx * 0.18f)
-                                    )
-                                },
-                                onDragEnd = {
-                                    val dx = drag.x
-                                    if (dx <= -threshold) {
-                                        val picked = "LEFT: $leftChoice"
-                                        scope.launch {
-                                            drag = Offset(-widthPx, drag.y * 0.2f)
-                                            drag = Offset.Zero
-                                            onPick(picked)
-                                        }
-                                    } else if (dx >= threshold) {
-                                        val picked = "RIGHT: $rightChoice"
-                                        scope.launch {
-                                            drag = Offset(widthPx, drag.y * 0.2f)
-                                            drag = Offset.Zero
-                                            onPick(picked)
-                                        }
-                                    } else {
-                                        scope.launch { drag = Offset.Zero }
-                                    }
-                                },
-                                onDragCancel = { scope.launch { drag = Offset.Zero } }
-                            )
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            translationX = drag.x
+                            translationY = drag.y
+                            rotationZ = rotation
                         },
                     contentAlignment = Alignment.Center
                 ) {
-                    val bmp = cardBitmap.value
-                    val showText = !showLoading
-                    if (bmp != null && showText) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .border(
-                                    6.dp,
-                                    if (settingName == "CYBERPUNK") Color(0xFF4BFBFF).copy(alpha = 0.25f) else Color.Transparent,
-                                    cardShape
+                    Box(
+                        modifier = Modifier
+                            .size(cardW, cardH)
+                            .graphicsLayer {
+                                shape = cardShape
+                                clip = true
+                            }
+                            .pointerInput(canSwipe, leftChoice, rightChoice) {
+                                if (!canSwipe) return@pointerInput
+
+                                detectDragGestures(
+                                    onDrag = { change, amount ->
+                                        change.consumePositionChange()
+                                        drag = Offset(
+                                            x = (drag.x + amount.x).coerceIn(-widthPx, widthPx),
+                                            y = (drag.y + amount.y * 0.35f).coerceIn(-heightPx * 0.18f, heightPx * 0.18f)
+                                        )
+                                        val dir = when {
+                                            drag.x <= -previewThreshold -> -1
+                                            drag.x >= previewThreshold -> 1
+                                            else -> 0
+                                        }
+                                        if (dir != 0 && dir != previewDir) {
+                                            previewDir = dir
+                                            SfxPlayer.playRawName(context, "card_filp")
+                                        } else if (dir == 0 && previewDir != 0) {
+                                            previewDir = 0
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        val dx = drag.x
+                                        if (dx <= -threshold) {
+                                            val picked = "LEFT: $leftChoice"
+                                            scope.launch {
+                                                SfxPlayer.playRawName(context, "card_filp")
+                                                drag = Offset(-widthPx, drag.y * 0.2f)
+                                                drag = Offset.Zero
+                                                previewDir = 0
+                                                onPick(picked)
+                                            }
+                                        } else if (dx >= threshold) {
+                                            val picked = "RIGHT: $rightChoice"
+                                            scope.launch {
+                                                SfxPlayer.playRawName(context, "card_filp")
+                                                drag = Offset(widthPx, drag.y * 0.2f)
+                                                drag = Offset.Zero
+                                                previewDir = 0
+                                                onPick(picked)
+                                            }
+                                        } else {
+                                            scope.launch {
+                                                drag = Offset.Zero
+                                                previewDir = 0
+                                            }
+                                        }
+                                    },
+                                    onDragCancel = {
+                                        scope.launch {
+                                            drag = Offset.Zero
+                                            previewDir = 0
+                                        }
+                                    }
                                 )
-                                .border(2.dp, borderBrush, cardShape)
-                        ) {
-                            Image(
-                                bitmap = bmp,
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val bmp = cardBitmap.value
+                        val showText = !showLoading
+                        if (bmp != null && showText) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .border(
+                                        6.dp,
+                                        if (settingName == "CYBERPUNK") Color(0xFF4BFBFF).copy(alpha = 0.25f) else Color.Transparent,
+                                        cardShape
+                                    )
+                                    .border(2.dp, borderBrush, cardShape)
+                            ) {
+                                Image(
+                                    bitmap = bmp,
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.25f))
+                                    .border(
+                                        6.dp,
+                                        if (settingName == "CYBERPUNK") Color(0xFF4BFBFF).copy(alpha = 0.25f) else Color.Transparent,
+                                        cardShape
+                                    )
+                                    .border(2.dp, borderBrush, cardShape)
                             )
                         }
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.25f))
-                                .border(
-                                    6.dp,
-                                    if (settingName == "CYBERPUNK") Color(0xFF4BFBFF).copy(alpha = 0.25f) else Color.Transparent,
-                                    cardShape
-                                )
-                                .border(2.dp, borderBrush, cardShape)
-                        )
-                    }
 
-                    if (settingName == "POSTAPOC") {
-                        val rustSpots = remember {
-                            List(160) { Offset(Random.nextFloat(), Random.nextFloat()) }
-                        }
-                        val dents = remember {
-                            List(36) { Offset(Random.nextFloat(), Random.nextFloat()) }
-                        }
-                        val scratches = remember {
-                            List(40) {
-                                val x1 = Random.nextFloat()
-                                val y1 = Random.nextFloat()
-                                val x2 = (x1 + (Random.nextFloat() - 0.5f) * 0.2f).coerceIn(0f, 1f)
-                                val y2 = (y1 + (Random.nextFloat() - 0.5f) * 0.2f).coerceIn(0f, 1f)
-                                Offset(x1, y1) to Offset(x2, y2)
+                        if (settingName == "POSTAPOC") {
+                            val rustSpots = remember {
+                                List(160) { Offset(Random.nextFloat(), Random.nextFloat()) }
                             }
-                        }
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            val stroke = 8.dp.toPx()
-                            val border = 12.dp.toPx()
-                            val w = size.width
-                            val h = size.height
-                            val yellow = Color(0xFFFFC107).copy(alpha = 0.65f)
-                            val black = Color(0xFF1A1A1A).copy(alpha = 0.75f)
-
-                            val borderPath = Path().apply {
-                                fillType = PathFillType.EvenOdd
-                                addRect(Rect(0f, 0f, w, h))
-                                addRect(Rect(border, border, w - border, h - border))
+                            val dents = remember {
+                                List(36) { Offset(Random.nextFloat(), Random.nextFloat()) }
                             }
+                            val scratches = remember {
+                                List(40) {
+                                    val x1 = Random.nextFloat()
+                                    val y1 = Random.nextFloat()
+                                    val x2 = (x1 + (Random.nextFloat() - 0.5f) * 0.2f).coerceIn(0f, 1f)
+                                    val y2 = (y1 + (Random.nextFloat() - 0.5f) * 0.2f).coerceIn(0f, 1f)
+                                    Offset(x1, y1) to Offset(x2, y2)
+                                }
+                            }
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                val stroke = 8.dp.toPx()
+                                val border = 12.dp.toPx()
+                                val w = size.width
+                                val h = size.height
+                                val yellow = Color(0xFFFFC107).copy(alpha = 0.65f)
+                                val black = Color(0xFF1A1A1A).copy(alpha = 0.75f)
 
-                            clipPath(borderPath) {
-                                val stripeStep = stroke * 1.4f
-                                var x = -h
-                                while (x < w + h) {
-                                    drawLine(
-                                        if (((x / stripeStep).toInt() % 2) == 0) yellow else black,
-                                        Offset(x, 0f),
-                                        Offset(x + h, h),
-                                        strokeWidth = stroke
+                                val borderPath = Path().apply {
+                                    fillType = PathFillType.EvenOdd
+                                    addRect(Rect(0f, 0f, w, h))
+                                    addRect(Rect(border, border, w - border, h - border))
+                                }
+
+                                clipPath(borderPath) {
+                                    val stripeStep = stroke * 1.4f
+                                    var x = -h
+                                    while (x < w + h) {
+                                        drawLine(
+                                            if (((x / stripeStep).toInt() % 2) == 0) yellow else black,
+                                            Offset(x, 0f),
+                                            Offset(x + h, h),
+                                            strokeWidth = stroke
+                                        )
+                                        x += stripeStep
+                                    }
+
+                                    val rust = Color(0xFF8B4A2A).copy(alpha = 0.35f)
+                                    rustSpots.forEach { p ->
+                                        val rx = p.x * w
+                                        val ry = p.y * h
+                                        drawCircle(rust, radius = 3.dp.toPx(), center = Offset(rx, ry))
+                                    }
+
+                                    val dentDark = Color(0xFF2A1A0E).copy(alpha = 0.45f)
+                                    val dentLight = Color(0xFFFFD27A).copy(alpha = 0.25f)
+                                    dents.forEach { p ->
+                                        val rx = p.x * w
+                                        val ry = p.y * h
+                                        val r = (4.dp + (p.x * 4f).dp).toPx()
+                                        drawCircle(dentDark, radius = r, center = Offset(rx, ry))
+                                        drawCircle(dentLight, radius = r * 0.55f, center = Offset(rx + r * 0.2f, ry + r * 0.15f))
+                                    }
+
+                                    val scratchLight = Color(0xFFFFE6A0).copy(alpha = 0.35f)
+                                    val scratchDark = Color(0xFF3A2A18).copy(alpha = 0.35f)
+                                    scratches.forEach { (a, b) ->
+                                        val p1 = Offset(a.x * w, a.y * h)
+                                        val p2 = Offset(b.x * w, b.y * h)
+                                        drawLine(scratchDark, p1, p2, strokeWidth = 2.dp.toPx())
+                                        drawLine(scratchLight, p1 + Offset(1.dp.toPx(), 1.dp.toPx()), p2 + Offset(1.dp.toPx(), 1.dp.toPx()), strokeWidth = 1.dp.toPx())
+                                    }
+                                }
+                            }
+                        } else if (settingName != "CYBERPUNK") {
+                            data class Speck(val edge: Int, val t: Float, val inset: Float, val radius: Float, val alpha: Float)
+                            val specks = remember {
+                                List(120) {
+                                    Speck(
+                                        edge = Random.nextInt(4),
+                                        t = Random.nextFloat(),
+                                        inset = Random.nextFloat(),
+                                        radius = 1.5f + Random.nextFloat() * 3.5f,
+                                        alpha = 0.18f + Random.nextFloat() * 0.25f
                                     )
-                                    x += stripeStep
                                 }
+                            }
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                val w = size.width
+                                val h = size.height
+                                val outer = 12.dp.toPx()
+                                val mid = 8.dp.toPx()
+                                val inner = 4.dp.toPx()
 
-                                val rust = Color(0xFF8B4A2A).copy(alpha = 0.35f)
-                                rustSpots.forEach { p ->
-                                    val rx = p.x * w
-                                    val ry = p.y * h
-                                    drawCircle(rust, radius = 3.dp.toPx(), center = Offset(rx, ry))
-                                }
+                                val dark = Color(0xFF3C2514)
+                                val base = Color(0xFF7A4C26)
+                                val gold = Color(0xFFC9A25A)
+                                val highlight = Color(0xFFE4C983)
+                                val shadow = Color(0xFF2A1A0E)
 
-                                val dentDark = Color(0xFF2A1A0E).copy(alpha = 0.45f)
-                                val dentLight = Color(0xFFFFD27A).copy(alpha = 0.25f)
-                                dents.forEach { p ->
-                                    val rx = p.x * w
-                                    val ry = p.y * h
-                                    val r = (4.dp + (p.x * 4f).dp).toPx()
-                                    drawCircle(dentDark, radius = r, center = Offset(rx, ry))
-                                    drawCircle(dentLight, radius = r * 0.55f, center = Offset(rx + r * 0.2f, ry + r * 0.15f))
-                                }
+                                drawRect(dark, size = size, style = Stroke(width = outer))
+                                drawRect(base, size = size, style = Stroke(width = mid))
+                                drawRect(gold, size = size, style = Stroke(width = inner))
 
-                                val scratchLight = Color(0xFFFFE6A0).copy(alpha = 0.35f)
-                                val scratchDark = Color(0xFF3A2A18).copy(alpha = 0.35f)
-                                scratches.forEach { (a, b) ->
-                                    val p1 = Offset(a.x * w, a.y * h)
-                                    val p2 = Offset(b.x * w, b.y * h)
-                                    drawLine(scratchDark, p1, p2, strokeWidth = 2.dp.toPx())
-                                    drawLine(scratchLight, p1 + Offset(1.dp.toPx(), 1.dp.toPx()), p2 + Offset(1.dp.toPx(), 1.dp.toPx()), strokeWidth = 1.dp.toPx())
+                                val inset = outer * 0.85f
+                                drawRect(shadow, topLeft = Offset(inset, inset), size = size.copy(width = w - inset * 2, height = h - inset * 2), style = Stroke(width = 2.dp.toPx()))
+                                drawRect(highlight, topLeft = Offset(inset + 2.dp.toPx(), inset + 2.dp.toPx()), size = size.copy(width = w - (inset + 2.dp.toPx()) * 2, height = h - (inset + 2.dp.toPx()) * 2), style = Stroke(width = 1.5.dp.toPx()))
+
+                                val corner = outer * 1.2f
+                                val cornerStroke = Stroke(width = 2.dp.toPx())
+                                drawCircle(highlight, radius = corner, center = Offset(outer * 0.9f, outer * 0.9f), style = cornerStroke)
+                                drawCircle(highlight, radius = corner, center = Offset(w - outer * 0.9f, outer * 0.9f), style = cornerStroke)
+                                drawCircle(highlight, radius = corner, center = Offset(outer * 0.9f, h - outer * 0.9f), style = cornerStroke)
+                                drawCircle(highlight, radius = corner, center = Offset(w - outer * 0.9f, h - outer * 0.9f), style = cornerStroke)
+
+                                specks.forEach { s ->
+                                    val pos = when (s.edge) {
+                                        0 -> Offset(s.t * w, outer * (0.4f + 0.5f * s.inset))
+                                        1 -> Offset(w - outer * (0.4f + 0.5f * s.inset), s.t * h)
+                                        2 -> Offset(s.t * w, h - outer * (0.4f + 0.5f * s.inset))
+                                        else -> Offset(outer * (0.4f + 0.5f * s.inset), s.t * h)
+                                    }
+                                    drawCircle(gold.copy(alpha = s.alpha), radius = s.radius.dp.toPx(), center = pos)
                                 }
                             }
                         }
-                    } else if (settingName != "CYBERPUNK") {
-                        data class Speck(val edge: Int, val t: Float, val inset: Float, val radius: Float, val alpha: Float)
-                        val specks = remember {
-                            List(120) {
-                                Speck(
-                                    edge = Random.nextInt(4),
-                                    t = Random.nextFloat(),
-                                    inset = Random.nextFloat(),
-                                    radius = 1.5f + Random.nextFloat() * 3.5f,
-                                    alpha = 0.18f + Random.nextFloat() * 0.25f
-                                )
-                            }
-                        }
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            val w = size.width
-                            val h = size.height
-                            val outer = 12.dp.toPx()
-                            val mid = 8.dp.toPx()
-                            val inner = 4.dp.toPx()
-
-                            val dark = Color(0xFF3C2514)
-                            val base = Color(0xFF7A4C26)
-                            val gold = Color(0xFFC9A25A)
-                            val highlight = Color(0xFFE4C983)
-                            val shadow = Color(0xFF2A1A0E)
-
-                            drawRect(dark, size = size, style = Stroke(width = outer))
-                            drawRect(base, size = size, style = Stroke(width = mid))
-                            drawRect(gold, size = size, style = Stroke(width = inner))
-
-                            val inset = outer * 0.85f
-                            drawRect(shadow, topLeft = Offset(inset, inset), size = size.copy(width = w - inset * 2, height = h - inset * 2), style = Stroke(width = 2.dp.toPx()))
-                            drawRect(highlight, topLeft = Offset(inset + 2.dp.toPx(), inset + 2.dp.toPx()), size = size.copy(width = w - (inset + 2.dp.toPx()) * 2, height = h - (inset + 2.dp.toPx()) * 2), style = Stroke(width = 1.5.dp.toPx()))
-
-                            val corner = outer * 1.2f
-                            val cornerStroke = Stroke(width = 2.dp.toPx())
-                            drawCircle(highlight, radius = corner, center = Offset(outer * 0.9f, outer * 0.9f), style = cornerStroke)
-                            drawCircle(highlight, radius = corner, center = Offset(w - outer * 0.9f, outer * 0.9f), style = cornerStroke)
-                            drawCircle(highlight, radius = corner, center = Offset(outer * 0.9f, h - outer * 0.9f), style = cornerStroke)
-                            drawCircle(highlight, radius = corner, center = Offset(w - outer * 0.9f, h - outer * 0.9f), style = cornerStroke)
-
-                            specks.forEach { s ->
-                                val pos = when (s.edge) {
-                                    0 -> Offset(s.t * w, outer * (0.4f + 0.5f * s.inset))
-                                    1 -> Offset(w - outer * (0.4f + 0.5f * s.inset), s.t * h)
-                                    2 -> Offset(s.t * w, h - outer * (0.4f + 0.5f * s.inset))
-                                    else -> Offset(outer * (0.4f + 0.5f * s.inset), s.t * h)
-                                }
-                                drawCircle(gold.copy(alpha = s.alpha), radius = s.radius.dp.toPx(), center = pos)
-                            }
-                        }
-                    }
 
                     if (showText) {
                         Box(
@@ -591,7 +627,7 @@ fun GameScreen(
                                 lines.random()
                             }
                             
-Text(
+                            Text(
                                 text = loadingText,
                                 color = Color.White.copy(alpha = 0.9f),
                                 fontSize = 13.sp,
@@ -606,5 +642,6 @@ Text(
             }
         }
     }
+}
 }
 
