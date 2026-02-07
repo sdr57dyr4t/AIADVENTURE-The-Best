@@ -9,9 +9,13 @@ data class AiTurnResult(
     val terrain: String = "",
     val deadPrc: Int? = null,
     val statChanges: List<StatChange> = emptyList(),
-    val imagePrompt: String = "",
     val mode: TurnMode = TurnMode.STORY,
-    val combatOutcome: CombatOutcome? = null
+    val combatOutcome: CombatOutcome? = null,
+    val heroMind: String = "",
+    val goal: String = "",
+    val tokensTotal: Int = 0,
+    val leftAction: ChoiceAction? = null,
+    val rightAction: ChoiceAction? = null
 )
 
 data class StatChange(

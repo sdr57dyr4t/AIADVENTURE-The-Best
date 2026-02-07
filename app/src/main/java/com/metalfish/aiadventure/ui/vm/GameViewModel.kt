@@ -1,27 +1,19 @@
-package com.metalfish.aiadventure.ui.vm
+﻿package com.metalfish.aiadventure.ui.vm
 
-import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.metalfish.aiadventure.domain.ai.AiEngine
-import com.metalfish.aiadventure.domain.image.ImageEngine
 import com.metalfish.aiadventure.domain.model.*
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
 import javax.inject.Inject
 
 @HiltViewModel
 class GameViewModel @Inject constructor(
-    private val ai: AiEngine,
-    private val images: ImageEngine,
-    @ApplicationContext private val appContext: Context
+    private val ai: AiEngine
 ) : ViewModel() {
 
     private val TAG = "AIAdventure"
@@ -32,19 +24,22 @@ class GameViewModel @Inject constructor(
     // ---- Prologue ----
     private var prologueActive: Boolean = true
     private var prologueStep: Int = 0
+    private var turnNumber: Int = 0
+    // ✅ Схараняем оригинальное значение setting
+    private var originalSetting: String = "FANTASY"
 
-    // ---- Cache files ----
-    private val imagesDir: File by lazy {
-        File(appContext.cacheDir, "scene_images").apply { mkdirs() }
-    }
     fun setWorldTextContext(setting: String, era: String, location: String, tone: String) {
         val base = GameUiState.initial()
 
         Log.d(TAG, "GameVM.setWorldTextContext: setting=$setting era=$era location=$location tone=$tone")
 
-        val settingUi = when (setting.trim().uppercase()) {
+        // ✅ Схараяем оригинальное значение
+        originalSetting = setting.trim().uppercase()
+
+        val settingUi = when (originalSetting) {
             "CYBERPUNK" -> SettingUi.CYBERPUNK
             "POSTAPOC" -> SettingUi.POSTAPOC
+            "SMUTA", "PETR1", "WAR1812" -> SettingUi.FANTASY
             else -> SettingUi.FANTASY
         }
 
@@ -60,11 +55,13 @@ class GameViewModel @Inject constructor(
                 era = era.trim().ifEmpty { base.world.era },
                 location = location.trim().ifEmpty { base.world.location },
                 tone = toneUi
-            )
+            ),
+            settingRaw = originalSetting
         )
 
         prologueActive = true
         prologueStep = 0
+        turnNumber = 0
         startPrologue()
     }
 
@@ -86,8 +83,8 @@ class GameViewModel @Inject constructor(
             }.getOrElse {
                 Log.e(TAG, "Prologue failed: ${it.message}", it)
                 _uiState.value = _uiState.value.copy(
-                    sceneText = "Ошибка пролога: ${it.message ?: "unknown"}",
-                    choices = listOf("Продолжить", "Заново").take(2),
+                    sceneText = "������ �������: ${it.message ?: "unknown"}",
+                    choices = listOf("����������", "������").take(2),
                     isGameOver = false,
                     isWaitingForResponse = false
                 )
@@ -95,7 +92,6 @@ class GameViewModel @Inject constructor(
             }
 
             applyAiResult(result)
-            generateCardForPrompt(result.imagePrompt)
         }
     }
 
@@ -104,7 +100,6 @@ class GameViewModel @Inject constructor(
     fun handleChoice(choice: String) {
         val current = _uiState.value
         if (current.isGameOver) return
-
         if (prologueActive) {
             val nextStep = (prologueStep + 1).coerceAtMost(2)
             val ctx = buildContext(current, phase = "PROLOGUE", step = nextStep)
@@ -121,7 +116,7 @@ class GameViewModel @Inject constructor(
                 }.getOrElse {
                     Log.e(TAG, "Prologue step=$nextStep failed: ${it.message}", it)
                     _uiState.value = _uiState.value.copy(
-                        sceneText = "Ошибка пролога: ${it.message ?: "unknown"}",
+                        sceneText = "������ �������: ${it.message ?: "unknown"}",
                         choices = _uiState.value.choices.take(2),
                         isWaitingForResponse = false
                     )
@@ -130,7 +125,6 @@ class GameViewModel @Inject constructor(
 
                 prologueStep = nextStep
                 applyAiResult(result)
-                generateCardForPrompt(result.imagePrompt)
 
                 if (prologueStep >= 2) {
                     prologueActive = false
@@ -154,15 +148,14 @@ class GameViewModel @Inject constructor(
             }.getOrElse {
                 Log.e(TAG, "RUN failed: ${it.message}", it)
                 _uiState.value = _uiState.value.copy(
-                    sceneText = "Ошибка генерации: ${it.message ?: "unknown"}",
+                    sceneText = "������ ���������: ${it.message ?: "unknown"}",
                     choices = _uiState.value.choices.take(2),
-                        isWaitingForResponse = false
+                    isWaitingForResponse = false
                 )
                 return@launch
             }
 
             applyAiResult(result)
-            generateCardForPrompt(result.imagePrompt)
         }
     }
 
@@ -185,7 +178,6 @@ class GameViewModel @Inject constructor(
             }
 
             applyAiResult(result)
-            generateCardForPrompt(result.imagePrompt)
         }
     }
 
@@ -232,12 +224,18 @@ class GameViewModel @Inject constructor(
 
         val finalText = if (result.mode == TurnMode.COMBAT) {
             when (result.combatOutcome) {
-                CombatOutcome.VICTORY -> (combinedText + "\n\nПобеда. Ты выжил.").take(520)
-                CombatOutcome.ESCAPE -> (combinedText + "\n\nТы сбежал. Жив, но не бесплатно.").take(520)
-                CombatOutcome.DEATH -> (combinedText + "\n\nТы пал.").take(520)
+                CombatOutcome.VICTORY -> (combinedText + "\n\n������. �� �����.").take(520)
+                CombatOutcome.ESCAPE -> (combinedText + "\n\n�� ������. ���, �� �� ���������.").take(520)
+                CombatOutcome.DEATH -> (combinedText + "\n\n�� ���.").take(520)
                 null -> combinedText
             }
         } else combinedText
+
+        val resolvedGoal = when {
+            cur.goal.isNotBlank() -> cur.goal
+            result.goal.isNotBlank() -> result.goal
+            else -> ""
+        }
 
         _uiState.value = cur.copy(
             hero = hero1,
@@ -247,97 +245,27 @@ class GameViewModel @Inject constructor(
             dayWeather = result.dayWeather,
             terrain = result.terrain,
             deadPrc = result.deadPrc,
+            heroMind = result.heroMind,
+            goal = resolvedGoal,
             isGameOver = gameOver,
-            isWaitingForResponse = false
+            isWaitingForResponse = false,
+            leftAction = result.leftAction,
+            rightAction = result.rightAction,
+            tokensTotal = if (result.tokensTotal > 0) result.tokensTotal else cur.tokensTotal,
+            turnNumber = run {
+                turnNumber += 1
+                turnNumber
+            },
+            settingRaw = cur.settingRaw
         )
 
         Log.d(TAG, "applyAiResult: mode=${result.mode} combat=${result.combatOutcome} hp=$hp gameOver=$gameOver")
     }
 
-    // ---------------------- IMAGE GENERATION ----------------------
-
-    private fun generateCardForPrompt(imagePrompt: String) {
-        val prompt = imagePrompt.ifBlank {
-            buildCardFallbackPrompt(_uiState.value, _uiState.value.sceneText)
-        }
-
-        _uiState.value = _uiState.value.copy(isImageLoading = true)
-
-        viewModelScope.launch {
-            val file = File(imagesDir, "card_${System.currentTimeMillis()}.jpg")
-
-            val bytes = runCatching {
-                images.generateImageBytes(
-                    prompt = prompt,
-                    width = 768,
-                    height = 1024,
-                    seed = stableSeed("card:${prompt.take(180)}")
-                )
-            }.getOrElse {
-                Log.e(TAG, "Card generation failed: ${it.message}", it)
-                _uiState.value = _uiState.value.copy(isImageLoading = false)
-                return@launch
-            }
-
-            runCatching {
-                withContext(Dispatchers.IO) { file.writeBytes(bytes) }
-                cleanupOldCards(keep = 8)
-                _uiState.value = _uiState.value.copy(
-                    imagePath = file.absolutePath,
-                    isImageLoading = false
-                )
-                Log.d(TAG, "Card generated: ${file.absolutePath}")
-            }.onFailure {
-                Log.e(TAG, "Saving card failed: ${it.message}", it)
-                _uiState.value = _uiState.value.copy(isImageLoading = false)
-            }
-        }
-    }
-
-    private fun cleanupOldCards(keep: Int) {
-        val cards = imagesDir.listFiles()
-            ?.filter { it.name.startsWith("card_") && it.name.endsWith(".jpg") }
-            ?.sortedByDescending { it.lastModified() }
-            ?: return
-
-        cards.drop(keep).forEach { runCatching { it.delete() } }
-    }
-
-    // ---------------------- PROMPTS ----------------------
-
-    private fun buildCardFallbackPrompt(s: GameUiState, sceneText: String): String {
-        val setting = s.world.setting.name
-        val tone = s.world.tone.name
-        val era = s.world.era
-        val location = s.world.location
-
-        val heroClass = s.heroProfile.archetype.name
-        val heroName = s.heroProfile.name
-
-        val style = when (setting) {
-            "CYBERPUNK" -> "cinematic cyberpunk action frame, neon rain, dramatic lighting"
-            "POSTAPOC" -> "cinematic post-apocalyptic action frame, gritty, dramatic light"
-            else -> "cinematic fantasy action frame, dramatic light, detailed"
-        }
-
-        return """
-$style.
-World: $setting / $era / $location. Tone: $tone.
-Hero: $heroName, class: $heroClass.
-Scene: ${sceneText.take(200)}
-No text, no watermark, no UI. High quality digital painting.
-""".trimIndent()
-    }
-
-    private fun stableSeed(key: String): Long {
-        var h = 1125899906842597L
-        for (c in key) h = 31L * h + c.code
-        return h
-    }
-
+    // ✅ Исправлено: используем originalSetting вместо state.world.setting.name
     private fun buildContext(state: GameUiState, phase: String, step: Int): AiContext {
         return AiContext(
-            setting = state.world.setting.name,
+            setting = originalSetting,
             era = state.world.era,
             location = state.world.location,
             tone = state.world.tone.name,
@@ -355,9 +283,8 @@ No text, no watermark, no UI. High quality digital painting.
     fun restart() {
         prologueActive = true
         prologueStep = 0
+        turnNumber = 0
         _uiState.value = GameUiState.initial()
         startPrologue()
     }
 }
-
-

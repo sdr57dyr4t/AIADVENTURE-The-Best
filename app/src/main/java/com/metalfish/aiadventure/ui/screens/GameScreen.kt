@@ -1,7 +1,8 @@
 package com.metalfish.aiadventure.ui.screens
 
-import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.EaseOutQuad
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -14,7 +15,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
@@ -33,42 +36,57 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.drawscope.clipPath
 import com.metalfish.aiadventure.R
 import com.metalfish.aiadventure.domain.model.GameUiState
+import com.metalfish.aiadventure.ui.audio.MusicPlayer
 import com.metalfish.aiadventure.ui.audio.SfxPlayer
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import java.util.Locale
 import kotlin.random.Random
+import java.text.NumberFormat
 
 @Composable
 fun GameScreen(
     state: GameUiState,
+    gigaChatModel: Int,
     onPick: (String) -> Unit,
     onRestart: () -> Unit,
     onSettings: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current.applicationContext
+
+    DisposableEffect(Unit) {
+        onDispose {
+            MusicPlayer.stop()
+        }
+    }
+
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
 
@@ -79,20 +97,12 @@ fun GameScreen(
             val leftChoice = state.choices.getOrNull(0) ?: "Лево"
             val rightChoice = state.choices.getOrNull(1) ?: "Право"
 
-            val bgRes = when (state.world.setting.name) {
+            val bgSetting = state.settingRaw.ifBlank { state.world.setting.name }
+            val bgRes = when (bgSetting) {
                 "CYBERPUNK" -> R.drawable.bg_cyberpunk
                 "POSTAPOC" -> R.drawable.bg_postapoc
+                "SMUTA", "PETR1", "WAR1812" -> R.drawable.bg_smuta
                 else -> R.drawable.bg_fantasy
-            }
-
-            val cardBitmap: State<ImageBitmap?> = produceState<ImageBitmap?>(initialValue = null, state.imagePath) {
-                val path = state.imagePath
-                value = withContext(Dispatchers.IO) {
-                    runCatching {
-                        if (path.isNullOrBlank()) return@runCatching null
-                        BitmapFactory.decodeFile(path)?.asImageBitmap()
-                    }.getOrNull()
-                }
             }
 
             // BACKGROUND
@@ -117,11 +127,17 @@ fun GameScreen(
                     )
             )
 
-            val canSwipe = !state.isImageLoading && !state.isGameOver
+            var showHeroMind by remember { mutableStateOf(false) }
+            var showGoal by remember { mutableStateOf(false) }
+            val showDialog = showHeroMind || showGoal
+            val canSwipe = !state.isGameOver && !showDialog
 
             var drag by remember { mutableStateOf(Offset.Zero) }
             var previewDir by remember { mutableStateOf(0) }
-            val rotation = ((drag.x / widthPx) * 9f).coerceIn(-10f, 10f)
+            val demoSwipeOffsetX = remember { Animatable(0f) }
+            var demoSwipePlayed by remember { mutableStateOf(false) }
+            val combinedDragX = drag.x + demoSwipeOffsetX.value
+            val rotation = ((combinedDragX / widthPx) * 9f).coerceIn(-10f, 10f)
 
             val hintText = when {
                 drag.x <= -10f -> leftChoice
@@ -173,7 +189,29 @@ fun GameScreen(
                 else -> Color(0xFF241A12).copy(alpha = 0.55f)
             }
             val statusBorderBrush = choiceBorderBrush
-            val showLoading = state.isWaitingForResponse || state.isImageLoading
+            val sceneFont = 18.sp
+            val sceneFontFamily = when (settingName) {
+                "CYBERPUNK" -> FontFamily(Font(R.font.cyberpunk_modern))
+                "POSTAPOC" -> FontFamily(Font(R.font.postapoc_terminal))
+                else -> FontFamily(Font(R.font.fantasy_book))
+            }
+            val showLoading = state.isWaitingForResponse
+            LaunchedEffect(state.turnNumber) {
+                if (state.turnNumber == 0) {
+                    demoSwipePlayed = false
+                }
+                showHeroMind = false
+                showGoal = false
+            }
+            LaunchedEffect(state.turnNumber, canSwipe, showLoading) {
+                if (!demoSwipePlayed && state.turnNumber == 1 && canSwipe && !showLoading && drag == Offset.Zero) {
+                    demoSwipePlayed = true
+                    demoSwipeOffsetX.snapTo(0f)
+                    demoSwipeOffsetX.animateTo(-threshold * 0.65f, tween(700, easing = EaseOutQuad))
+                    demoSwipeOffsetX.animateTo(threshold * 0.65f, tween(900, easing = EaseOutQuad))
+                    demoSwipeOffsetX.animateTo(0f, tween(600, easing = EaseOutQuad))
+                }
+            }
             val spin = rememberInfiniteTransition(label = "loading")
                 .animateFloat(
                     initialValue = 0f,
@@ -184,13 +222,45 @@ fun GameScreen(
                     ),
                     label = "loadingSpin"
                 ).value
-            val loadingTextColor = when (settingName) {
+            val milkColor = Color(0xFFF5F1E8)
+            val loadingArcBrush = when (bgSetting) {
+                "SMUTA", "PETR1", "WAR1812" -> SolidColor(milkColor)
+                else -> borderBrush
+            }
+            val loadingTextColor = when (bgSetting) {
                 "CYBERPUNK" -> Color(0xFF5BFAFF)
                 "POSTAPOC" -> Color(0xFFFFC107)
+                "SMUTA", "PETR1", "WAR1812" -> milkColor
                 else -> Color(0xFF5A7A3C)
             }
 
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            val modelLabel = when (gigaChatModel) {
+                1 -> "pro"
+                2 -> "max"
+                else -> "lite"
+            }
+            val tokensCostRub = when (gigaChatModel) {
+                1 -> (state.tokensTotal * 1500.0) / 3_000_000.0
+                2 -> (state.tokensTotal * 1950.0) / 3_000_000.0
+                else -> (state.tokensTotal * 1300.0) / 20_000_000.0
+            }
+            val numberFormat = remember {
+                NumberFormat.getNumberInstance(Locale("ru", "RU")).apply {
+                    isGroupingUsed = true
+                }
+            }
+            val tokensValueText = numberFormat.format(state.tokensTotal.toLong())
+            val tokensLineText = "$modelLabel $tokensValueText"
+            val costFormat = remember {
+                NumberFormat.getNumberInstance(Locale("ru", "RU")).apply {
+                    isGroupingUsed = true
+                    minimumFractionDigits = 2
+                    maximumFractionDigits = 2
+                }
+            }
+            val tokensCostText = costFormat.format(tokensCostRub)
+
+            Box(Modifier.fillMaxSize()) {
                 AnimatedVisibility(
                     visible = hintText.isNotBlank() && canSwipe,
                     enter = fadeIn(),
@@ -226,8 +296,9 @@ fun GameScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        .align(Alignment.Center)
                         .graphicsLayer {
-                            translationX = drag.x
+                            translationX = combinedDragX
                             translationY = drag.y
                             rotationZ = rotation
                         },
@@ -243,95 +314,93 @@ fun GameScreen(
                             .pointerInput(canSwipe, leftChoice, rightChoice) {
                                 if (!canSwipe) return@pointerInput
 
-                                detectDragGestures(
-                                    onDrag = { change, amount ->
-                                        change.consumePositionChange()
-                                        drag = Offset(
-                                            x = (drag.x + amount.x).coerceIn(-widthPx, widthPx),
-                                            y = (drag.y + amount.y * 0.35f).coerceIn(-heightPx * 0.18f, heightPx * 0.18f)
-                                        )
-                                        val dir = when {
-                                            drag.x <= -previewThreshold -> -1
-                                            drag.x >= previewThreshold -> 1
-                                            else -> 0
-                                        }
-                                        if (dir != 0 && dir != previewDir) {
-                                            previewDir = dir
-                                            SfxPlayer.playRawName(context, "card_filp")
-                                        } else if (dir == 0 && previewDir != 0) {
-                                            previewDir = 0
-                                        }
-                                    },
-                                    onDragEnd = {
-                                        val dx = drag.x
-                                        if (dx <= -threshold) {
-                                            val picked = "LEFT: $leftChoice"
-                                            scope.launch {
-                                                SfxPlayer.playRawName(context, "card_filp")
-                                                drag = Offset(-widthPx, drag.y * 0.2f)
-                                                drag = Offset.Zero
-                                                previewDir = 0
-                                                onPick(picked)
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    val pointerId = down.id
+                                    val slop = viewConfiguration.touchSlop
+                                    var total = Offset.Zero
+                                    var pastSlop = false
+                                    var swipeEnabled = false
+
+                                    while (true) {
+                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                        val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                                        if (!change.pressed) break
+
+                                        val delta = change.positionChange()
+                                        if (delta != Offset.Zero) {
+                                            total += delta
+                                            if (!pastSlop && total.getDistance() > slop) {
+                                                pastSlop = true
+                                                swipeEnabled = kotlin.math.abs(total.x) > kotlin.math.abs(total.y)
+                                                if (!swipeEnabled) {
+                                                    drag = Offset.Zero
+                                                    previewDir = 0
+                                                    return@awaitEachGesture
+                                                }
                                             }
-                                        } else if (dx >= threshold) {
-                                            val picked = "RIGHT: $rightChoice"
-                                            scope.launch {
-                                                SfxPlayer.playRawName(context, "card_filp")
-                                                drag = Offset(widthPx, drag.y * 0.2f)
-                                                drag = Offset.Zero
-                                                previewDir = 0
-                                                onPick(picked)
+                                            if (pastSlop && swipeEnabled) {
+                                                change.consumePositionChange()
+                                                drag = Offset(
+                                                    x = (drag.x + delta.x).coerceIn(-widthPx, widthPx),
+                                                    y = (drag.y + delta.y * 0.35f).coerceIn(-heightPx * 0.18f, heightPx * 0.18f)
+                                                )
+                                                val dir = when {
+                                                    drag.x <= -previewThreshold -> -1
+                                                    drag.x >= previewThreshold -> 1
+                                                    else -> 0
+                                                }
+                                                if (dir != 0 && dir != previewDir) {
+                                                    previewDir = dir
+                                                } else if (dir == 0 && previewDir != 0) {
+                                                    previewDir = 0
+                                                }
                                             }
-                                        } else {
-                                            scope.launch {
-                                                drag = Offset.Zero
-                                                previewDir = 0
-                                            }
-                                        }
-                                    },
-                                    onDragCancel = {
-                                        scope.launch {
-                                            drag = Offset.Zero
-                                            previewDir = 0
                                         }
                                     }
-                                )
+
+                                    if (!pastSlop || !swipeEnabled) {
+                                        drag = Offset.Zero
+                                        previewDir = 0
+                                        return@awaitEachGesture
+                                    }
+
+                                    val dx = drag.x
+                                    if (dx <= -threshold) {
+                                        val picked = "LEFT: $leftChoice"
+                                        scope.launch {
+                                            SfxPlayer.playRawName(context, "card_filp")
+                                            drag = Offset(-widthPx, drag.y * 0.2f)
+                                            drag = Offset.Zero
+                                            previewDir = 0
+                                            onPick(picked)
+                                        }
+                                    } else if (dx >= threshold) {
+                                        val picked = "RIGHT: $rightChoice"
+                                        scope.launch {
+                                            SfxPlayer.playRawName(context, "card_filp")
+                                            drag = Offset(widthPx, drag.y * 0.2f)
+                                            drag = Offset.Zero
+                                            previewDir = 0
+                                            onPick(picked)
+                                        }
+                                    } else {
+                                        drag = Offset.Zero
+                                        previewDir = 0
+                                    }
+                                }
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        val bmp = cardBitmap.value
-                        val showText = !showLoading
-                        if (bmp != null && showText) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .border(
-                                        6.dp,
-                                        if (settingName == "CYBERPUNK") Color(0xFF4BFBFF).copy(alpha = 0.25f) else Color.Transparent,
-                                        cardShape
-                                    )
-                                    .border(2.dp, borderBrush, cardShape)
-                            ) {
-                                Image(
-                                    bitmap = bmp,
-                                    contentDescription = null,
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop
-                                )
-                            }
-                        } else {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(Color.Black.copy(alpha = 0.25f))
-                                    .border(
-                                        6.dp,
-                                        if (settingName == "CYBERPUNK") Color(0xFF4BFBFF).copy(alpha = 0.25f) else Color.Transparent,
-                                        cardShape
-                                    )
-                                    .border(2.dp, borderBrush, cardShape)
-                            )
-                        }
+                        val edgeGlow =
+                            if (settingName == "CYBERPUNK") Color(0xFF4BFBFF).copy(alpha = 0.25f) else Color.Transparent
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.25f))
+                                .border(6.dp, edgeGlow, cardShape)
+                                .border(2.dp, borderBrush, cardShape)
+                        )
 
                         if (settingName == "POSTAPOC") {
                             val rustSpots = remember {
@@ -399,18 +468,22 @@ fun GameScreen(
                                         val p1 = Offset(a.x * w, a.y * h)
                                         val p2 = Offset(b.x * w, b.y * h)
                                         drawLine(scratchDark, p1, p2, strokeWidth = 2.dp.toPx())
-                                        drawLine(scratchLight, p1 + Offset(1.dp.toPx(), 1.dp.toPx()), p2 + Offset(1.dp.toPx(), 1.dp.toPx()), strokeWidth = 1.dp.toPx())
+                                        drawLine(
+                                            scratchLight,
+                                            p1 + Offset(1.dp.toPx(), 1.dp.toPx()),
+                                            p2 + Offset(1.dp.toPx(), 1.dp.toPx()),
+                                            strokeWidth = 1.dp.toPx()
+                                        )
                                     }
                                 }
                             }
-                    } else if (settingName != "CYBERPUNK") {
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            val frame = 6.dp.toPx()
-                            drawRect(Color(0xFF3A3A3A), size = size, style = Stroke(width = frame))
+                        } else if (settingName != "CYBERPUNK") {
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                val frame = 6.dp.toPx()
+                                drawRect(Color(0xFF3A3A3A), size = size, style = Stroke(width = frame))
+                            }
                         }
-                    }
 
-                    if (showText) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -425,189 +498,365 @@ fun GameScreen(
                                 )
                         )
 
-                        if (state.sceneName.isNotBlank()) {
+                        val showCardText = !showLoading
+                        if (showCardText) {
+                            if (state.sceneName.isNotBlank()) {
+                                val title = if (state.turnNumber > 0) {
+                                    "Ход ${state.turnNumber}. ${state.sceneName.trim()}"
+                                } else {
+                                    state.sceneName.trim()
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopCenter)
+                                        .padding(top = 10.dp, start = 12.dp, end = 12.dp)
+                                        .fillMaxWidth()
+                                            .background(hintBg, cardShape)
+                                            .let {
+                                                if (settingName == "CYBERPUNK") {
+                                                    it.border(2.dp, hintBorderBrush, cardShape)
+                                                } else it
+                                            }
+                                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                                ) {
+                                    Text(
+                                        text = title,
+                                        color = Color.White,
+                                        fontSize = 14.sp,
+                                        textAlign = TextAlign.Center,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                            }
+
+                            val textScroll = rememberScrollState()
+                            val t = state.sceneText.trim()
+                            val textTopPadding = if (state.sceneName.isNotBlank()) 56.dp else 24.dp
+                            val innerTextPadding = textPadding + 6.dp
+
                             Box(
                                 modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(top = 10.dp, start = 12.dp, end = 12.dp)
-                                    .fillMaxWidth()
-                                    .background(hintBg, cardShape)
-                                    .let {
-                                        if (settingName == "CYBERPUNK") {
-                                            it.border(2.dp, hintBorderBrush, cardShape)
-                                        } else it
-                                    }
-                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                                    .fillMaxSize()
+                                    .padding(horizontal = innerTextPadding)
+                                    .padding(top = textTopPadding, bottom = 92.dp)
+                                    .verticalScroll(textScroll),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = state.sceneName.trim(),
+                                    text = t,
                                     color = Color.White,
-                                    fontSize = 14.sp,
+                                    fontSize = sceneFont,
+                                    fontFamily = sceneFontFamily,
+                                    lineHeight = (sceneFont.value + 4).sp,
                                     textAlign = TextAlign.Center,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
+                                    overflow = TextOverflow.Clip,
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
-                        }
 
-                        val textScroll = rememberScrollState()
-                        val t = state.sceneText.trim()
-                        val font = 18.sp
-                        val fontFamily = when (settingName) {
-                            "CYBERPUNK" -> FontFamily(Font(R.font.cyberpunk_modern))
-                            "POSTAPOC" -> FontFamily(Font(R.font.postapoc_terminal))
-                            else -> FontFamily(Font(R.font.fantasy_book))
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = textPadding)
-                                .padding(top = 56.dp, bottom = 84.dp)
-                                .verticalScroll(textScroll),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = t,
-                                color = Color.White,
-                                fontSize = font,
-                                fontFamily = fontFamily,
-                                lineHeight = (font.value + 4).sp,
-                                textAlign = TextAlign.Center,
-                                overflow = TextOverflow.Clip,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 10.dp, start = 12.dp, end = 12.dp)
-                                .fillMaxWidth()
-                                .background(statusBg, cardShape)
-                                .let {
-                                    if (settingName == "CYBERPUNK") {
-                                        it.border(2.dp, statusBorderBrush, cardShape)
-                                    } else it
-                                }
-                                .padding(horizontal = 12.dp, vertical = 8.dp)
-                        ) {
-                            val deadPrc = state.deadPrc
-                            val level = when {
-                                deadPrc == null -> -1
-                                deadPrc <= 33 -> 0
-                                deadPrc <= 66 -> 1
-                                else -> 2
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 10.dp, start = 12.dp, end = 12.dp)
+                                    .fillMaxWidth()
+                                    .background(statusBg, cardShape)
+                                    .let {
+                                        if (settingName == "CYBERPUNK") {
+                                            it.border(2.dp, statusBorderBrush, cardShape)
+                                        } else it
+                                    }
+                                    .height(72.dp)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = state.dayWeather.trim().ifBlank { "-" },
-                                        color = Color.White,
-                                        fontSize = 13.sp,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Clip
-                                    )
-                                    Text(
-                                        text = state.terrain.trim().ifBlank { "-" },
-                                        color = Color.White.copy(alpha = 0.85f),
-                                        fontSize = 13.sp,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Clip
-                                    )
+                                val deadPrc = state.deadPrc
+                                val level = when {
+                                    deadPrc == null -> -1
+                                    deadPrc <= 33 -> 0
+                                    deadPrc <= 66 -> 1
+                                    else -> 2
                                 }
 
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .fillMaxHeight(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = state.dayWeather.trim().ifBlank { "-" },
+                                            color = Color.White,
+                                            fontSize = 13.sp,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Clip
+                                        )
+                                        Text(
+                                            text = state.terrain.trim().ifBlank { "-" },
+                                            color = Color.White.copy(alpha = 0.85f),
+                                            fontSize = 13.sp,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Clip
+                                        )
+                                    }
+
+                                    Row(
+                                        modifier = Modifier
+                                            .padding(start = 12.dp)
+                                            .fillMaxHeight(),
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(32.dp)
+                                                    .background(Color.White.copy(alpha = 0.2f), RoundedCornerShape(2.dp))
+                                                    .clickable {
+                                                        showGoal = true
+                                                        showHeroMind = false
+                                                    },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Image(
+                                                    painter = painterResource(id = R.drawable.ic_goal),
+                                                    contentDescription = "Goal",
+                                                    modifier = Modifier.size(26.dp),
+                                                    colorFilter = ColorFilter.tint(Color.White)
+                                                )
+                                            }
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(32.dp)
+                                                    .background(Color.White.copy(alpha = 0.2f), RoundedCornerShape(2.dp))
+                                                    .clickable {
+                                                        showHeroMind = true
+                                                        showGoal = false
+                                                    },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Image(
+                                                    painter = painterResource(id = R.drawable.ic_mind),
+                                                    contentDescription = "Mind",
+                                                    modifier = Modifier.size(26.dp),
+                                                    colorFilter = ColorFilter.tint(Color.White)
+                                                )
+                                            }
+                                        }
+                                        Column(
+                                            modifier = Modifier.fillMaxHeight(),
+                                            verticalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterVertically),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            val red = if (level == 2) Color(0xFFFF4D4D) else Color(0x55FF4D4D)
+                                            val yellow = if (level == 1) Color(0xFFFFC107) else Color(0x55FFC107)
+                                            val green = if (level == 0) Color(0xFF5CFF7A) else Color(0x555CFF7A)
+                                            Box(Modifier.size(10.dp).background(red, RoundedCornerShape(2.dp)))
+                                            Box(Modifier.size(10.dp).background(yellow, RoundedCornerShape(2.dp)))
+                                            Box(Modifier.size(10.dp).background(green, RoundedCornerShape(2.dp)))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        AnimatedVisibility(
+                            visible = showLoading,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.35f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Canvas(
+                                        modifier = Modifier
+                                            .size(72.dp)
+                                            .rotate(spin)
+                                    ) {
+                                        val stroke = Stroke(width = 6.dp.toPx())
+                                        drawArc(
+                                            brush = loadingArcBrush,
+                                            startAngle = 0f,
+                                            sweepAngle = 280f,
+                                            useCenter = false,
+                                            style = stroke
+                                        )
+                                    }
+                                    Spacer(Modifier.height(16.dp))
+                                    val loadingText = remember(settingName) {
+                                        val lines = when (settingName) {
+                                            "CYBERPUNK" -> listOf(
+                                                "Неон шипит в дожде. Сканирую узел...",
+                                                "Прокси-зонд в работе. Держи линию.",
+                                                "Сеть трещит. Подгружаю фрагменты реальности...",
+                                                "Дрон-курьер несет данные. Еще секунда.",
+                                                "Лед трещит под трассировкой. Жди сигнала."
+                                            )
+                                            "POSTAPOC" -> listOf(
+                                                "Пыль в эфире. Собираю обрывки хроник...",
+                                                "Старая антенна ловит шум. Подождем.",
+                                                "Генератор кашляет. Данные на подходе.",
+                                                "Ржавый терминал оживает. Еще немного.",
+                                                "Ветер завывает. Радио шепчет ответы..."
+                                            )
+                                            "SMUTA", "PETR1", "WAR1812" -> listOf(
+                                                "Летописец сверяет даты и имена. Формируется новая сцена эпохи...",
+                                                "Шелестят страницы учебника. Сюжет выстраивается по историческим фактам.",
+                                                "Историческая хроника уточняется. Подожди секунду.",
+                                                "Собираю детали времени: люди, события и причины. Почти готово.",
+                                                "Сюжет эпохи дополняется достоверными деталями. Еще момент."
+                                            )
+                                            else -> listOf(
+                                                "Скрипят страницы. Летописец пишет...",
+                                                "Огонь в очаге мерцает. Сказание рождается.",
+                                                "Ветер несет вести. Терпи мгновение.",
+                                                "Старинный хроникер вздыхает... почти готово.",
+                                                "Сверкнул знак судьбы. История складывается."
+                                            )
+                                        }
+                                        lines.random()
+                                    }
+
+                                    Text(
+                                        text = loadingText,
+                                        color = loadingTextColor,
+                                        fontSize = 14.sp,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier
+                                            .padding(horizontal = 24.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        if (showDialog) {
+                            val dialogScroll = rememberScrollState()
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.4f))
+                                    .clickable {
+                                        showHeroMind = false
+                                        showGoal = false
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
                                 Column(
-                                    modifier = Modifier.padding(start = 12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth(0.9f)
+                                        .background(Color.Black.copy(alpha = 0.9f), cardShape)
+                                        .border(1.dp, Color.White.copy(alpha = 0.25f), cardShape)
+                                        .padding(horizontal = 12.dp, vertical = 12.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
-                                    val red = if (level == 2) Color(0xFFFF4D4D) else Color(0x55FF4D4D)
-                                    val yellow = if (level == 1) Color(0xFFFFC107) else Color(0x55FFC107)
-                                    val green = if (level == 0) Color(0xFF5CFF7A) else Color(0x555CFF7A)
-                                    Box(Modifier.size(10.dp).background(red, CircleShape))
-                                    Box(Modifier.size(10.dp).background(yellow, CircleShape))
-                                    Box(Modifier.size(10.dp).background(green, CircleShape))
+                                    val dialogTitle = if (showGoal) "Цель" else "Мысли героя"
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(hintBg, cardShape)
+                                            .let {
+                                                if (settingName == "CYBERPUNK") {
+                                                    it.border(2.dp, hintBorderBrush, cardShape)
+                                                } else it
+                                            }
+                                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                                    ) {
+                                        Text(
+                                            text = dialogTitle,
+                                            color = Color.White,
+                                            fontSize = 14.sp,
+                                            textAlign = TextAlign.Center,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                    Spacer(Modifier.height(10.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(180.dp)
+                                            .verticalScroll(dialogScroll)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(min = 180.dp),
+                                            verticalArrangement = Arrangement.Center,
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Text(
+                                                text = if (showGoal) {
+                                                    state.goal.ifBlank { "-" }
+                                                } else {
+                                                    state.heroMind.ifBlank { "-" }
+                                                },
+                                                color = Color.White.copy(alpha = 0.9f),
+                                                fontSize = sceneFont,
+                                                fontFamily = sceneFontFamily,
+                                                textAlign = TextAlign.Center,
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        }
+                                    }
                                 }
-                            }
-                        }
-                    }
-
-                    AnimatedVisibility(
-                        visible = showLoading,
-                        enter = fadeIn(),
-                        exit = fadeOut()
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.35f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Canvas(
-                                modifier = Modifier
-                                    .size(72.dp)
-                                    .rotate(spin)
-                            ) {
-                                val stroke = Stroke(width = 6.dp.toPx())
-                                drawArc(
-                                    brush = borderBrush,
-                                    startAngle = 0f,
-                                    sweepAngle = 280f,
-                                    useCenter = false,
-                                    style = stroke
-                                )
-                            }
-                                Spacer(Modifier.height(16.dp))
-                            val loadingText = remember(settingName) {
-                                val lines = when (settingName) {
-                                    "CYBERPUNK" -> listOf(
-                                        "Неон шипит в дождь. Сканирую узел...”" ,
-                                        "Прокси-зонд в работе. Держи линию.",
-                                        "Сеть трещит. Подгружаю фрагменты реальности...",
-                                        "Дрон-курьер несет данные. Еще секунда.",
-                                        "Лед трещит под трассировкой. Жди сигнала."
-                                    )
-                                    "POSTAPOC" -> listOf(
-                                        "Пыль в эфире. Собираю обрывки хроник...",
-                                        "Старая антенна ловит шум. Подождем.",
-                                        "Генератор кашляет. Данные на подходе.",
-                                        "Ржавый терминал оживает. Еще немного.",
-                                        "Ветер завывает. Радио шепчет ответы..."
-                                    )
-                                    else -> listOf(
-                                        "Скрипят страницы. Летописец пишет...",
-                                        "Огонь в очаге мерцает. Сказание рождается.",
-                                        "Ветер несет вести. Терпи мгновение.",
-                                        "Старинный хроникер вздыхает... почти готово.",
-                                        "Сверкнул знак судьбы. История складывается."
-                                    )
-                                }
-                                lines.random()
-                            }
-                            
-                            Text(
-                                text = loadingText,
-                                color = loadingTextColor,
-                                fontSize = 14.sp,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier
-                                    .padding(horizontal = 24.dp)
-                            )
                             }
                         }
                     }
                 }
-
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    horizontalAlignment = Alignment.End
+                ) {
+                    Text(
+                        text = tokensCostText,
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.End
+                    )
+                    Text(
+                        text = tokensLineText,
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 11.sp,
+                        textAlign = TextAlign.End
+                    )
+                }
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    horizontalAlignment = Alignment.Start
+                ) {
+                    Text(
+                        text = "\u20BD",
+                        color = Color(0xFFFFD54F),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp
+                    )
+                    Text(
+                        text = "\uD83E\uDDE9",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp
+                    )
+                }
             }
+
+        }
         }
     }
 }
-}
+
+

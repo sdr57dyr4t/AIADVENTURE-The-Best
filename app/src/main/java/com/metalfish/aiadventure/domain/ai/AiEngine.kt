@@ -9,4 +9,6 @@ interface AiEngine {
         playerChoice: String,
         context: AiContext
     ): AiTurnResult
+
+    suspend fun generateSettingDescription(prompt: String): String
 }

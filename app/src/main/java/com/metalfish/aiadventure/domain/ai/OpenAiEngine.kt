@@ -22,7 +22,13 @@ class OpenAiEngine : AiEngine {
             dayWeather = "",
             terrain = "",
             deadPrc = null,
+            heroMind = "",
+            goal = "",
             statChanges = listOf(StatChange("reputation", 0))
         )
+    }
+
+    override suspend fun generateSettingDescription(prompt: String): String {
+        return "OpenAI Engine не подключён. Используй GigaChat/FakeAiEngine."
     }
 }

@@ -6,6 +6,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.activity.compose.BackHandler
+import android.app.Activity
+import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.compose.NavHost
@@ -13,16 +16,27 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.metalfish.aiadventure.ui.model.HeroDraft
 import com.metalfish.aiadventure.ui.model.WorldDraft
+import com.metalfish.aiadventure.ui.screens.EpochModeScreen
 import com.metalfish.aiadventure.ui.screens.GameScreen
+import com.metalfish.aiadventure.ui.screens.KnowledgeCheckScreen
+import com.metalfish.aiadventure.ui.screens.LearnMoreScreen
 import com.metalfish.aiadventure.ui.screens.SettingsScreen
 import com.metalfish.aiadventure.ui.screens.SetupScreen
 import com.metalfish.aiadventure.ui.screens.StartScreen
+import com.metalfish.aiadventure.ui.audio.MusicPlayer
+import com.metalfish.aiadventure.ui.audio.SfxPlayer
+import com.metalfish.aiadventure.ui.vm.AppViewModel
 import com.metalfish.aiadventure.ui.vm.GameViewModel
+import com.metalfish.aiadventure.ui.vm.KnowledgeCheckViewModel
+import com.metalfish.aiadventure.ui.vm.LearnMoreViewModel
 import com.metalfish.aiadventure.ui.vm.SettingsViewModel
 
 object Routes {
     const val Start = "start"
     const val Setup = "setup"
+    const val EpochMode = "epoch_mode"
+    const val LearnMore = "learn_more"
+    const val KnowledgeCheck = "knowledge_check"
     const val Game = "game"
     const val Settings = "settings"
 }
@@ -31,6 +45,13 @@ object Routes {
 fun AppRoot() {
     val TAG = "AIAdventure"
     val navController = rememberNavController()
+    val appVm: AppViewModel = hiltViewModel()
+    val appSettings by appVm.settings.collectAsState()
+
+    androidx.compose.runtime.LaunchedEffect(appSettings.musicVolume, appSettings.sfxVolume) {
+        MusicPlayer.setVolume(appSettings.musicVolume)
+        SfxPlayer.setVolume(appSettings.sfxVolume)
+    }
 
     val heroDraftState = remember { mutableStateOf<HeroDraft?>(null) }
     val worldDraftState = remember { mutableStateOf<WorldDraft?>(null) }
@@ -47,6 +68,13 @@ fun AppRoot() {
         composable(Routes.Start) {
             val parentEntry = remember(navController) { safeParentEntry() }
             val gameVm: GameViewModel = hiltViewModel(parentEntry)
+            val activity = LocalContext.current as? Activity
+
+            BackHandler {
+                MusicPlayer.stop()
+                SfxPlayer.stop()
+                activity?.finishAndRemoveTask()
+            }
 
             StartScreen(
                 onStartWorld = { world ->
@@ -60,11 +88,80 @@ fun AppRoot() {
                         tone = world.tone
                     )
 
-                    navController.navigate(Routes.Game) {
+                    navController.navigate(Routes.EpochMode) {
                         popUpTo(Routes.Start) { inclusive = false }
                     }
-                }
+                },
+                onSettings = { navController.navigate(Routes.Settings) }
             )
+        }
+
+        composable(Routes.EpochMode) {
+            val world = worldDraftState.value
+            if (world == null) {
+                navController.popBackStack()
+            } else {
+                EpochModeScreen(
+                    world = world,
+                    onBack = { navController.popBackStack() },
+                    onLearnMore = { navController.navigate(Routes.LearnMore) },
+                    onKnowledgeCheck = { navController.navigate(Routes.KnowledgeCheck) },
+                    onImmerse = { navController.navigate(Routes.Game) }
+                )
+            }
+        }
+
+        composable(Routes.LearnMore) {
+            val world = worldDraftState.value
+            if (world == null) {
+                navController.popBackStack()
+            } else {
+                val vm: LearnMoreViewModel = hiltViewModel()
+                val state by vm.uiState.collectAsState()
+
+                androidx.compose.runtime.LaunchedEffect(
+                    world.setting,
+                    world.era,
+                    world.location,
+                    world.tone
+                ) {
+                    vm.initialize(world)
+                }
+
+                LearnMoreScreen(
+                    state = state,
+                    onBack = { navController.popBackStack() },
+                    onInputChanged = vm::onInputChanged,
+                    onAsk = vm::askCurrentQuestion,
+                    onAskSuggestion = vm::askSuggestedQuestion
+                )
+            }
+        }
+
+        composable(Routes.KnowledgeCheck) {
+            val world = worldDraftState.value
+            if (world == null) {
+                navController.popBackStack()
+            } else {
+                val vm: KnowledgeCheckViewModel = hiltViewModel()
+                val state by vm.uiState.collectAsState()
+
+                androidx.compose.runtime.LaunchedEffect(
+                    world.setting,
+                    world.era,
+                    world.location,
+                    world.tone
+                ) {
+                    vm.initialize(world)
+                }
+
+                KnowledgeCheckScreen(
+                    state = state,
+                    onBack = { navController.popBackStack() },
+                    onChooseOption = vm::chooseOption,
+                    onNextQuestion = vm::nextQuestion
+                )
+            }
         }
 
         composable(Routes.Setup) {
@@ -101,6 +198,7 @@ fun AppRoot() {
 
             GameScreen(
                 state = uiState,
+                gigaChatModel = appSettings.gigaChatModel,
                 onPick = { choice ->
                     Log.d(TAG, "AppRoot.onPick -> GameVM.handleChoice('$choice')")
                     gameVm.handleChoice(choice)
@@ -108,7 +206,9 @@ fun AppRoot() {
                 onRestart = {
                     Log.d(TAG, "AppRoot.onRestart")
                     gameVm.restart()
-                    navController.navigate(Routes.Setup)
+                    navController.navigate(Routes.Start) {
+                        popUpTo(Routes.Start) { inclusive = true }
+                    }
                 },
                 onSettings = { navController.navigate(Routes.Settings) }
             )
@@ -120,10 +220,13 @@ fun AppRoot() {
 
             SettingsScreen(
                 settings = settings,
-                onDarkTheme = vm::setDarkTheme,
-                onTextSize = vm::setTextSize,   // ✅ теперь Int
-                onAutosave = vm::setAutosave
+                onGigaChatModel = vm::setGigaChatModel,
+                onMusicVolume = vm::setMusicVolume,
+                onSfxVolume = vm::setSfxVolume,
+                onClose = { navController.popBackStack() }
             )
         }
     }
 }
+
+

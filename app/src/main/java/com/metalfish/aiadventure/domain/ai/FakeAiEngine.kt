@@ -50,7 +50,13 @@ class FakeAiEngine : AiEngine {
             dayWeather = "День, ясно",
             terrain = "Равнина",
             deadPrc = 10,
+            heroMind = "Стоит рискнуть, но осторожность не помешает.",
+            goal = "Найти безопасный путь через развилку.",
             statChanges = changes
         )
+    }
+
+    override suspend fun generateSettingDescription(prompt: String): String {
+        return "Тихий прибрежный город на краю шторма, где магия и механика борются за власть."
     }
 }

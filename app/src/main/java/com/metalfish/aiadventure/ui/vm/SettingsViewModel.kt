@@ -23,7 +23,10 @@ class SettingsViewModel @Inject constructor(
             initialValue = AppSettings(
                 darkTheme = false,
                 textSize = 1,
-                autosave = true
+                autosave = true,
+                gigaChatModel = 0,
+                musicVolume = 1f,
+                sfxVolume = 1f
             )
         )
 
@@ -37,5 +40,17 @@ class SettingsViewModel @Inject constructor(
 
     fun setAutosave(enabled: Boolean) {
         viewModelScope.launch { store.setAutosave(enabled) }
+    }
+
+    fun setGigaChatModel(model: Int) {
+        viewModelScope.launch { store.setGigaChatModel(model) }
+    }
+
+    fun setMusicVolume(volume: Float) {
+        viewModelScope.launch { store.setMusicVolume(volume) }
+    }
+
+    fun setSfxVolume(volume: Float) {
+        viewModelScope.launch { store.setSfxVolume(volume) }
     }
 }

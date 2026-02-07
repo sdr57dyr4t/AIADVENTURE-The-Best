@@ -14,14 +14,18 @@ data class GameUiState(
     val dayWeather: String = "",
     val terrain: String = "",
     val deadPrc: Int? = null,
+    val heroMind: String = "",
+    val goal: String = "",
 
     val hero: HeroUi,
     val heroProfile: HeroProfileUi,
     val world: WorldConfigUi,
 
-    // ✅ image
-    val imagePath: String? = null,
-    val isImageLoading: Boolean = false
+    val leftAction: ChoiceAction? = null,
+    val rightAction: ChoiceAction? = null,
+    val tokensTotal: Int = 0,
+    val turnNumber: Int = 0,
+    val settingRaw: String = "FANTASY"
 ) {
     companion object {
         fun initial() = GameUiState(
@@ -33,6 +37,8 @@ data class GameUiState(
             dayWeather = "",
             terrain = "",
             deadPrc = null,
+            heroMind = "",
+            goal = "",
             hero = HeroUi(hp = 50, stamina = 30, gold = 10, reputation = 0),
 
             heroProfile = HeroProfileUi(
@@ -49,8 +55,11 @@ data class GameUiState(
                 tone = ToneUi.ADVENTURE
             ),
 
-            imagePath = null,
-            isImageLoading = false
+            leftAction = null,
+            rightAction = null,
+            tokensTotal = 0,
+            turnNumber = 0,
+            settingRaw = "FANTASY"
         )
     }
 }
@@ -61,3 +70,7 @@ data class HeroUi(
     val gold: Int,
     val reputation: Int
 )
+
+
+
+

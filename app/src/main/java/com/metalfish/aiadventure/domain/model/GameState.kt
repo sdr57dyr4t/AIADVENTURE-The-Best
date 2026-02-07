@@ -42,8 +42,7 @@ data class WorldConfig(
 data class Scene(
     val text: String,
     val choices: List<String>,
-    val difficulty: Int = 3,
-    val imagePrompt: String? = null
+    val difficulty: Int = 3
 )
 
 @Serializable

@@ -22,7 +22,10 @@ class AppViewModel @Inject constructor(
             initialValue = AppSettings(
                 darkTheme = false,
                 textSize = 1,
-                autosave = true
+                autosave = true,
+                gigaChatModel = 0,
+                musicVolume = 1f,
+                sfxVolume = 1f
             )
         )
 }
